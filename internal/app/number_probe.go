@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -31,16 +32,15 @@ func (s *Server) ProbeNumberSMS(ctx context.Context, payload map[string]any) (ma
 		logNumberProbeResult(ctxData, phone, DynamicProxyLease{}, result)
 		return result, nil
 	}
-	lease, err := s.acquireNumberProbeProxy(ctx, ctxData.GetCorrelationId())
+	lease, proxyURL, proxy, releaseProxy, err := s.numberProbeProxy(ctx, payload, ctxData.GetCorrelationId())
 	if err != nil {
 		result := numberProbeProxyFailure(payload, err)
 		logNumberProbeResult(ctxData, phone, DynamicProxyLease{}, result)
 		return result, nil
 	}
-	defer s.proxyRuntime.Release(context.Background(), lease.AccountID)
+	defer releaseProxy()
 
-	proxy := map[string]any{"success": true, "accepted": true, "proxy_mode": "US_RANDOM_DYNAMIC_IP", "country_code": "US", "account_id": lease.AccountID, "lease_id": lease.LeaseID, "proxy_url": lease.ProxyURL}
-	probeEngine, err := engine.WithProxyURL(lease.ProxyURL)
+	probeEngine, err := engine.WithProxyURL(proxyURL)
 	if err != nil {
 		result := numberProbeError(payload, err)
 		logNumberProbeResult(ctxData, phone, lease, result)
@@ -68,6 +68,36 @@ func (s *Server) acquireNumberProbeProxy(ctx context.Context, correlationID stri
 		return DynamicProxyLease{}, fmt.Errorf("PROXY_RUNTIME_API_BASE_URL is required")
 	}
 	return s.proxyRuntime.AcquireUSDynamic(ctx, "WA_NUMBER_PROBE", correlationID, numberProbeProxyLeaseTTL)
+}
+
+func (s *Server) numberProbeProxy(ctx context.Context, payload map[string]any, correlationID string) (DynamicProxyLease, string, map[string]any, func(), error) {
+	if proxyURL, lease, countryCode := sharedNumberProbeProxy(payload); proxyURL != "" {
+		proxy := map[string]any{"success": true, "accepted": true, "proxy_mode": "SHARED_DYNAMIC_IP", "country_code": firstNonEmpty(countryCode, "UNKNOWN"), "account_id": lease.AccountID, "lease_id": lease.LeaseID}
+		return lease, proxyURL, proxy, func() {}, nil
+	}
+	lease, err := s.acquireNumberProbeProxy(ctx, correlationID)
+	if err != nil {
+		return DynamicProxyLease{}, "", nil, func() {}, err
+	}
+	proxy := map[string]any{"success": true, "accepted": true, "proxy_mode": "US_RANDOM_DYNAMIC_IP", "country_code": "US", "account_id": lease.AccountID, "lease_id": lease.LeaseID}
+	return lease, lease.ProxyURL, proxy, func() { s.proxyRuntime.Release(context.Background(), lease.AccountID) }, nil
+}
+
+func sharedNumberProbeProxy(payload map[string]any) (string, DynamicProxyLease, string) {
+	proxyURL := firstNonEmpty(textField(payload, "proxy_url"), textField(objectField(payload, "proxy"), "proxy_url"))
+	state := map[string]any{}
+	rawState := firstNonEmpty(textField(payload, "proxy_state_json"), textField(payload, "state_json"), textField(objectField(payload, "proxy"), "state_json"))
+	if rawState != "" {
+		_ = json.Unmarshal([]byte(rawState), &state)
+	}
+	if proxyURL == "" {
+		proxyURL = textField(state, "_gopay_proxy")
+	}
+	return proxyURL, DynamicProxyLease{
+		AccountID: firstNonEmpty(textField(payload, "proxy_account_id"), textField(state, "_proxy_runtime_account_id")),
+		LeaseID:   firstNonEmpty(textField(payload, "proxy_lease_id"), textField(state, "_proxy_runtime_lease_id")),
+		ProxyURL:  proxyURL,
+	}, firstNonEmpty(textField(payload, "proxy_country_code"), textField(state, "_gopay_country_code"), textField(state, "_proxy_runtime_preflight_country_code"))
 }
 
 func buildNumberProbeResult(input map[string]any, proxy map[string]any, fingerprint map[string]any, account map[string]any, sms map[string]any) map[string]any {
@@ -106,7 +136,7 @@ func buildNumberProbeResult(input map[string]any, proxy map[string]any, fingerpr
 		"error_message":           failureReason,
 		"reject_reason":           failureReason,
 		"phone":                   objectField(input, "phone"),
-		"proxy":                   map[string]any{"proxy_mode": "US_RANDOM_DYNAMIC_IP", "country_code": "US"},
+		"proxy":                   map[string]any{"proxy_mode": firstNonEmpty(textField(proxy, "proxy_mode"), "US_RANDOM_DYNAMIC_IP"), "country_code": firstNonEmpty(textField(proxy, "country_code"), "US")},
 		"fingerprint_persistence": firstNonEmpty(textField(fingerprint, "fingerprint_persistence"), "RANDOM_NOT_COMMITTED"),
 		"fingerprint":             objectField(fingerprint, "fingerprint"),
 		"account_probe":           account,
