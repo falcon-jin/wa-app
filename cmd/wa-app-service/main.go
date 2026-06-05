@@ -41,7 +41,8 @@ func main() {
 		log.Fatalf("initialize wa-app native engine: %v", err)
 	}
 	service := app.NewServer(store, runtime, engine, clock, ids)
-	service.SetDynamicProxyRuntime(app.NewDynamicProxyRuntime(cfg.ProxyRuntimeAPIURL, ids))
+	service.SetDynamicProxyRuntime(app.NewDynamicProxyRuntime(cfg.ProxyRuntimeAPIURL))
+	service.SetLongConnectionProxyUsername(cfg.LongConnectionProxyUsername)
 	platformBus, err := newPlatformEventBus(cfg)
 	if err != nil {
 		log.Fatalf("initialize wa-app platform event bus: %v", err)

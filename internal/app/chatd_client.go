@@ -22,23 +22,51 @@ const (
 	defaultChatdHost       = "g.whatsapp.net"
 	defaultChatdPort       = 443
 	defaultChatdMaxFrame   = 4 << 20
-	defaultChatdReadWindow = 15 * time.Second
+	defaultChatdReadWindow = 20 * time.Second
+	defaultChatdKeepAlive  = 30 * time.Second
 )
 
 type chatdClientConfig struct {
 	Host          string
 	Port          int
+	Endpoints     []chatdEndpoint
 	TLS           bool
 	RoutingInfo   string
 	ProxyURL      string
 	InsecureTLS   bool
 	Timeout       time.Duration
 	MaxFrameBytes int
+	MaxEndpoints  int
 }
 
 type chatdClient struct {
 	cfg   chatdClientConfig
 	codec *binaryNodeCodec
+}
+
+type chatdEndpoint struct {
+	Host string
+	Port int
+}
+
+type chatdSession struct {
+	conn               net.Conn
+	transport          chatdTransport
+	endpoint           chatdEndpoint
+	serverStaticPublic string
+}
+
+type chatdSessionUpdate struct {
+	RoutingInfo        string
+	Endpoint           chatdEndpoint
+	ServerStaticPublic string
+}
+
+func chatdPhase(phase string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s failed: %w", phase, err)
 }
 
 func newChatdClient(cfg chatdClientConfig) *chatdClient {
@@ -57,38 +85,137 @@ func newChatdClient(cfg chatdClientConfig) *chatdClient {
 	return &chatdClient{cfg: cfg, codec: newBinaryNodeCodec()}
 }
 
-func (c *chatdClient) receiveBatch(ctx context.Context, state nativeState, input EngineMessageInput, appVersion string, ids IDGenerator, now time.Time) ([]*waappv1.InboundMessage, []chatdEncPayload, error) {
+func (c *chatdClient) receiveBatch(ctx context.Context, state nativeState, input EngineMessageInput, appVersion string, now time.Time) ([]*waappv1.InboundMessage, []chatdEncPayload, chatdSessionUpdate, error) {
+	session, err := c.openSession(ctx, state, input.RegisteredIdentityID, defaultLoginPayload, appVersion)
+	if err != nil {
+		return nil, nil, chatdSessionUpdate{}, err
+	}
+	defer session.Close()
+	return session.receiveBatch(input, now)
+}
+
+func (c *chatdClient) openSession(ctx context.Context, state nativeState, registeredIdentityID string, payloadBuilder func(loginIdentity, nativeState, string) []byte, appVersion string) (*chatdSession, error) {
+	var lastErr error
+	for _, endpoint := range c.endpoints() {
+		session, err := c.openEndpointSession(ctx, endpoint, state, registeredIdentityID, payloadBuilder, appVersion)
+		if err == nil {
+			return session, nil
+		}
+		lastErr = fmt.Errorf("chatd endpoint %s failed: %w", endpoint.address(), err)
+		if ctx.Err() != nil {
+			if lastErr != nil {
+				return nil, fmt.Errorf("%w: %v", ctx.Err(), lastErr)
+			}
+			return nil, ctx.Err()
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no chatd endpoint candidates")
+}
+
+func (c *chatdClient) openEndpointSession(ctx context.Context, endpoint chatdEndpoint, state nativeState, registeredIdentityID string, payloadBuilder func(loginIdentity, nativeState, string) []byte, appVersion string) (*chatdSession, error) {
 	state.ChatStatic = ensureChatStatic(state.ChatStatic)
 	privateKey, err := state.ChatStatic.privateBytes()
 	if err != nil {
-		return nil, nil, err
+		return nil, chatdPhase("prepare chatd static identity", err)
 	}
 	publicKey, err := state.ChatStatic.publicBytes()
 	if err != nil {
-		return nil, nil, err
+		return nil, chatdPhase("prepare chatd static identity", err)
 	}
-	identity, err := resolveLoginIdentity(input.RegisteredIdentityID, state)
+	identity, err := resolveLoginIdentity(registeredIdentityID, state)
 	if err != nil {
-		return nil, nil, err
+		return nil, chatdPhase("resolve chatd login identity", err)
 	}
-	conn, err := c.dial(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(c.cfg.Timeout))
-	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 	routingInfo, err := decodeRoutingInfo(c.cfg.RoutingInfo)
 	if err != nil {
-		return nil, nil, err
+		return nil, chatdPhase("decode chatd routing info", err)
 	}
-	loginPayload := defaultLoginPayload(identity, state, appVersion)
+	loginPayload := payloadBuilder(identity, state, appVersion)
+	conn, err := c.dial(ctx, endpoint)
+	if err != nil {
+		return nil, chatdPhase("chatd dial", err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(c.cfg.Timeout))
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 	keys, err := doNoiseHandshake(rw, privateKey, publicKey, loginPayload, routingInfo, c.cfg.MaxFrameBytes)
 	if err != nil {
-		return nil, nil, err
+		_ = conn.Close()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: %v", ctx.Err(), err)
+		}
+		return nil, err
 	}
-	transport := chatdTransport{rw: rw, keys: keys, codec: c.codec, maxFrameBytes: c.cfg.MaxFrameBytes}
-	_ = transport.sendNode(buildPingNode())
+	_ = conn.SetDeadline(time.Time{})
+	return &chatdSession{
+		conn:               conn,
+		transport:          chatdTransport{rw: rw, keys: keys, codec: c.codec, maxFrameBytes: c.cfg.MaxFrameBytes},
+		endpoint:           endpoint,
+		serverStaticPublic: b64u(keys.serverStaticPublic),
+	}, nil
+}
+
+func (c *chatdClient) endpoints() []chatdEndpoint {
+	source := c.cfg.Endpoints
+	if len(source) == 0 {
+		source = []chatdEndpoint{{Host: c.cfg.Host, Port: c.cfg.Port}}
+	}
+	out := make([]chatdEndpoint, 0, len(source))
+	seen := map[string]struct{}{}
+	for _, endpoint := range source {
+		endpoint = endpoint.normalized(c.cfg.Host, c.cfg.Port)
+		if endpoint.Host == "" || endpoint.Port <= 0 {
+			continue
+		}
+		key := endpoint.address()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, endpoint)
+	}
+	if c.cfg.MaxEndpoints > 0 && len(out) > c.cfg.MaxEndpoints {
+		return out[:c.cfg.MaxEndpoints]
+	}
+	return out
+}
+
+func (e chatdEndpoint) normalized(defaultHost string, defaultPort int) chatdEndpoint {
+	if strings.TrimSpace(e.Host) == "" {
+		e.Host = defaultHost
+	}
+	e.Host = strings.TrimSuffix(strings.TrimSpace(e.Host), ".")
+	if e.Port <= 0 {
+		e.Port = defaultPort
+	}
+	return e
+}
+
+func (e chatdEndpoint) address() string {
+	return net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
+}
+
+func (s *chatdSession) Close() error {
+	if s == nil || s.conn == nil {
+		return nil
+	}
+	return s.conn.Close()
+}
+
+func (s *chatdSession) update() chatdSessionUpdate {
+	if s == nil {
+		return chatdSessionUpdate{}
+	}
+	return chatdSessionUpdate{Endpoint: s.endpoint, ServerStaticPublic: s.serverStaticPublic}
+}
+
+func (s *chatdSession) receiveBatch(input EngineMessageInput, now time.Time) ([]*waappv1.InboundMessage, []chatdEncPayload, chatdSessionUpdate, error) {
+	if s == nil {
+		return nil, nil, chatdSessionUpdate{}, fmt.Errorf("chatd session is not open")
+	}
+	update := s.update()
 	maxMessages := input.MaxMessages
 	if maxMessages <= 0 {
 		maxMessages = 10
@@ -97,8 +224,8 @@ func (c *chatdClient) receiveBatch(ctx context.Context, state nativeState, input
 	messages := []*waappv1.InboundMessage{}
 	payloads := []chatdEncPayload{}
 	for len(messages) < maxMessages && time.Now().Before(deadline) {
-		_ = conn.SetReadDeadline(time.Now().Add(time.Until(deadline)))
-		node, err := transport.readNode()
+		_ = s.conn.SetReadDeadline(time.Now().Add(time.Until(deadline)))
+		node, err := s.transport.readNode()
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				break
@@ -106,10 +233,21 @@ func (c *chatdClient) receiveBatch(ctx context.Context, state nativeState, input
 			if len(messages) > 0 {
 				break
 			}
-			return nil, nil, err
+			return nil, nil, update, chatdPhase("chatd frame read", err)
+		}
+		if node.Tag == "xmlstreamend" {
+			return nil, nil, update, newChatdError("server closed xml stream")
+		}
+		if isChatdTerminalNode(node) {
+			return nil, nil, update, newChatdError("server sent %s", controlNodeSummary(node))
 		}
 		if ack, ok := buildAckForNode(node); ok {
-			_ = transport.sendNode(ack)
+			if err := s.transport.sendNode(ack); err != nil {
+				return nil, nil, update, chatdPhase("chatd ack write", err)
+			}
+		}
+		if nextRouting := routingInfoFromNode(node); nextRouting != "" {
+			update.RoutingInfo = nextRouting
 		}
 		encs := iterEncPayloads(node)
 		if len(encs) == 0 {
@@ -130,55 +268,35 @@ func (c *chatdClient) receiveBatch(ctx context.Context, state nativeState, input
 			}
 		}
 	}
-	return messages, payloads, nil
+	return messages, payloads, update, nil
 }
 
 func inboundMessageID(accountID string, stanzaID string, tag string, sender string, fingerprint string) string {
 	return "wamsg_" + stableID(strings.Join([]string{accountID, stanzaID, tag, sender, fingerprint}, ":"))
 }
 
-func (c *chatdClient) checkLoginState(ctx context.Context, state nativeState, input EngineLoginCheckInput, appVersion string) error {
-	state.ChatStatic = ensureChatStatic(state.ChatStatic)
-	privateKey, err := state.ChatStatic.privateBytes()
+func (c *chatdClient) checkLoginState(ctx context.Context, state nativeState, input EngineLoginCheckInput, appVersion string) (chatdSessionUpdate, error) {
+	session, err := c.openSession(ctx, state, input.RegisteredIdentityID, passiveLoginCheckPayload, appVersion)
 	if err != nil {
-		return err
+		return chatdSessionUpdate{}, err
 	}
-	publicKey, err := state.ChatStatic.publicBytes()
+	defer session.Close()
+	update := session.update()
+	if err := session.transport.sendNode(buildPingNode()); err != nil {
+		return update, chatdPhase("chatd ping write", err)
+	}
+	_ = session.conn.SetReadDeadline(time.Now().Add(minDuration(2*time.Second, c.cfg.Timeout)))
+	node, err := session.transport.readNode()
 	if err != nil {
-		return err
-	}
-	identity, err := resolveLoginIdentity(input.RegisteredIdentityID, state)
-	if err != nil {
-		return err
-	}
-	conn, err := c.dial(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(c.cfg.Timeout))
-	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
-	routingInfo, err := decodeRoutingInfo(c.cfg.RoutingInfo)
-	if err != nil {
-		return err
-	}
-	loginPayload := passiveLoginCheckPayload(identity, state, appVersion)
-	keys, err := doNoiseHandshake(rw, privateKey, publicKey, loginPayload, routingInfo, c.cfg.MaxFrameBytes)
-	if err != nil {
-		return err
-	}
-	transport := chatdTransport{rw: rw, keys: keys, codec: c.codec, maxFrameBytes: c.cfg.MaxFrameBytes}
-	if err := transport.sendNode(buildPingNode()); err != nil {
-		return err
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(minDuration(2*time.Second, c.cfg.Timeout)))
-	if _, err := transport.readNode(); err != nil {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return nil
+			return update, nil
 		}
-		return err
+		return update, chatdPhase("chatd frame read", err)
 	}
-	return nil
+	if nextRouting := routingInfoFromNode(node); nextRouting != "" {
+		update.RoutingInfo = nextRouting
+	}
+	return update, nil
 }
 
 func ensureChatStatic(key nativeCurveKeyPair) nativeCurveKeyPair {
@@ -236,14 +354,14 @@ func (t *chatdTransport) sendNode(node chatdNode) error {
 	return chatdWriteFrame(t.rw.Writer, ciphertext)
 }
 
-func (c *chatdClient) dial(ctx context.Context) (net.Conn, error) {
-	address := net.JoinHostPort(c.cfg.Host, strconv.Itoa(c.cfg.Port))
+func (c *chatdClient) dial(ctx context.Context, endpoint chatdEndpoint) (net.Conn, error) {
+	address := endpoint.address()
 	var conn net.Conn
 	var err error
 	if strings.TrimSpace(c.cfg.ProxyURL) != "" {
-		conn, err = c.dialProxy(ctx, address)
+		conn, err = c.dialProxy(ctx, endpoint)
 	} else {
-		dialer := net.Dialer{Timeout: c.cfg.Timeout}
+		dialer := c.netDialer()
 		conn, err = dialer.DialContext(ctx, "tcp", address)
 	}
 	if err != nil {
@@ -252,7 +370,7 @@ func (c *chatdClient) dial(ctx context.Context) (net.Conn, error) {
 	if !c.cfg.TLS {
 		return conn, nil
 	}
-	tlsConn := tls.Client(conn, &tls.Config{ServerName: c.cfg.Host, InsecureSkipVerify: c.cfg.InsecureTLS})
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: endpoint.Host, InsecureSkipVerify: c.cfg.InsecureTLS})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -260,16 +378,16 @@ func (c *chatdClient) dial(ctx context.Context) (net.Conn, error) {
 	return tlsConn, nil
 }
 
-func (c *chatdClient) dialProxy(ctx context.Context, target string) (net.Conn, error) {
+func (c *chatdClient) dialProxy(ctx context.Context, endpoint chatdEndpoint) (net.Conn, error) {
 	parsed, err := url.Parse(c.cfg.ProxyURL)
 	if err != nil {
 		return nil, err
 	}
 	switch {
 	case strings.HasPrefix(parsed.Scheme, "socks5"):
-		return c.dialSOCKS5(ctx, parsed)
+		return c.dialSOCKS5(ctx, parsed, endpoint)
 	case parsed.Scheme == "http" || parsed.Scheme == "https":
-		return c.dialHTTPConnect(ctx, parsed, target)
+		return c.dialHTTPConnect(ctx, parsed, endpoint.address())
 	default:
 		return nil, fmt.Errorf("unsupported chatd proxy scheme %q", parsed.Scheme)
 	}
@@ -279,7 +397,7 @@ func (c *chatdClient) dialHTTPConnect(ctx context.Context, parsed *url.URL, targ
 	if parsed.Host == "" {
 		return nil, fmt.Errorf("proxy host is required")
 	}
-	dialer := net.Dialer{Timeout: c.cfg.Timeout}
+	dialer := c.netDialer()
 	conn, err := dialer.DialContext(ctx, "tcp", parsed.Host)
 	if err != nil {
 		return nil, err
@@ -326,11 +444,11 @@ func (c *chatdClient) dialHTTPConnect(ctx context.Context, parsed *url.URL, targ
 	return &bufferedConn{Conn: conn, reader: reader}, nil
 }
 
-func (c *chatdClient) dialSOCKS5(ctx context.Context, parsed *url.URL) (net.Conn, error) {
+func (c *chatdClient) dialSOCKS5(ctx context.Context, parsed *url.URL, endpoint chatdEndpoint) (net.Conn, error) {
 	if parsed.Host == "" {
 		return nil, fmt.Errorf("SOCKS5 proxy host is required")
 	}
-	dialer := net.Dialer{Timeout: c.cfg.Timeout}
+	dialer := c.netDialer()
 	conn, err := dialer.DialContext(ctx, "tcp", parsed.Host)
 	if err != nil {
 		return nil, err
@@ -377,10 +495,10 @@ func (c *chatdClient) dialSOCKS5(ctx context.Context, parsed *url.URL) (net.Conn
 			return nil, fmt.Errorf("SOCKS5 username/password authentication failed")
 		}
 	}
-	hostBytes := []byte(c.cfg.Host)
+	hostBytes := []byte(endpoint.Host)
 	request := []byte{0x05, 0x01, 0x00, 0x03, byte(len(hostBytes))}
 	request = append(request, hostBytes...)
-	request = append(request, byte(c.cfg.Port>>8), byte(c.cfg.Port))
+	request = append(request, byte(endpoint.Port>>8), byte(endpoint.Port))
 	if _, err := conn.Write(request); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -419,6 +537,10 @@ func (c *chatdClient) dialSOCKS5(ctx context.Context, parsed *url.URL) (net.Conn
 	return conn, nil
 }
 
+func (c *chatdClient) netDialer() net.Dialer {
+	return net.Dialer{Timeout: c.cfg.Timeout, KeepAlive: defaultChatdKeepAlive}
+}
+
 type bufferedConn struct {
 	net.Conn
 	reader *bufio.Reader
@@ -434,10 +556,21 @@ func decodeRoutingInfo(value string) ([]byte, error) {
 	if raw, err := base64.RawURLEncoding.DecodeString(value); err == nil {
 		return raw, nil
 	}
+	if raw, err := base64.RawStdEncoding.DecodeString(value); err == nil {
+		return raw, nil
+	}
 	if raw, err := base64.StdEncoding.DecodeString(value); err == nil {
 		return raw, nil
 	}
 	return []byte(value), nil
+}
+
+func normalizeChatRoutingInfo(value string) string {
+	raw, err := decodeRoutingInfo(value)
+	if err != nil || len(raw) == 0 || len(raw) > 256 {
+		return ""
+	}
+	return b64u(raw)
 }
 
 func resolveLoginIdentity(registeredIdentityID string, state nativeState) (loginIdentity, error) {

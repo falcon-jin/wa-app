@@ -53,7 +53,7 @@ func (s *Server) publishOTPCandidates(ctx context.Context, reqCtx *waappv1.Reque
 		if s.platformPublisher == nil {
 			continue
 		}
-		eventCtx := eventbus.NewEventContext(eventbus.EventContextConfig{
+		eventCtx := eventbus.NewEventMetadata(eventbus.EventMetadataConfig{
 			EventID:        eventbus.StableEventID("wa-otp-", workspaceID, msg.GetMessageId(), otp),
 			EventName:      eventcatalog.WAOTPReceived.EventName,
 			EventVersion:   eventcatalog.WAOTPReceived.EventVersion,
@@ -68,7 +68,7 @@ func (s *Server) publishOTPCandidates(ctx context.Context, reqCtx *waappv1.Reque
 			e164Number = account.GetPhone().GetE164Number()
 		}
 		event := &wav1.WaOtpReceivedEvent{
-			Context:              eventCtx,
+			Metadata:             eventCtx,
 			WorkspaceId:          workspaceID,
 			E164Number:           e164Number,
 			Source:               source,

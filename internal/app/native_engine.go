@@ -22,6 +22,7 @@ const (
 )
 
 var nativeSensitiveDigitsPattern = regexp.MustCompile(`\b[0-9]{4,8}\b`)
+var chatdNodeTokenErrorPattern = regexp.MustCompile(`(?i)(readstring could not match token|invalid list-size token)\s+([0-9]{1,3})`)
 
 type NativeEngine struct {
 	stateStore     Store
@@ -147,6 +148,9 @@ func (e *NativeEngine) SubmitVerificationCode(ctx context.Context, input EngineS
 	}
 	data, enc, err := client.postWASafe(ctx, defaultWARegisterURL, plain, state.UserAgent)
 	state.LastRegister = sanitizeResponse(data)
+	if routingInfo := chatRoutingInfoFromValue(data["edge_routing_info"]); routingInfo != "" {
+		state.ChatRoutingInfo = routingInfo
+	}
 	if enc != "" {
 		state.LastRegister["enc_sha256"] = encHash(enc)
 	}
@@ -181,10 +185,18 @@ func (e *NativeEngine) CheckLoginState(ctx context.Context, input EngineLoginChe
 	if input.RemoteTimeout > 0 {
 		timeout = input.RemoteTimeout
 	}
-	client := newChatdClient(chatdClientConfig{ProxyURL: proxyURL, Timeout: timeout})
-	if err := client.checkLoginState(ctx, state, input, defaultWAAppVersion); err != nil {
+	client := newChatdClient(chatdConfigForState(proxyURL, state, timeout))
+	update, err := client.checkLoginState(ctx, state, input, defaultWAAppVersion)
+	if applyChatdConnectionState(&state, update) {
+		_ = e.saveState(ctx, input.WorkspaceID, input.ClientProfileID, state)
+	}
+	if err != nil {
 		status := loginCheckStatusForError(err)
-		return EngineLoginCheckResult{Status: status, Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, "login state remote check failed", status == waappv1.LoginStateCheckStatus_LOGIN_STATE_CHECK_STATUS_UNREACHABLE)}
+		message := "login state remote check failed"
+		if snippet := chatdSafeFailureMessage(err); snippet != "" {
+			message += ": " + snippet
+		}
+		return EngineLoginCheckResult{Status: status, Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, message, status == waappv1.LoginStateCheckStatus_LOGIN_STATE_CHECK_STATUS_UNREACHABLE)}
 	}
 	return EngineLoginCheckResult{Status: waappv1.LoginStateCheckStatus_LOGIN_STATE_CHECK_STATUS_ACTIVE}
 }
@@ -216,17 +228,177 @@ func (e *NativeEngine) ReceiveMessageBatch(ctx context.Context, input EngineMess
 	if err != nil {
 		return EngineMessageBatchResult{Err: err}
 	}
-	client := newChatdClient(chatdClientConfig{ProxyURL: proxyURL})
-	messages, payloads, err := client.receiveBatch(ctx, state, input, defaultWAAppVersion, e.ids, e.clock.Now())
+	client := newChatdClient(chatdConfigForState(proxyURL, state, 0))
+	messages, payloads, update, err := client.receiveBatch(ctx, state, input, defaultWAAppVersion, e.clock.Now())
 	if err != nil {
-		return EngineMessageBatchResult{Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, "native chatd receive failed", true)}
+		return EngineMessageBatchResult{Err: chatdReceiveError(err)}
 	}
+	if applyChatdReceiveState(&state, input, payloads, update) {
+		_ = e.saveState(ctx, input.WorkspaceID, input.ClientProfileID, state)
+	}
+	return EngineMessageBatchResult{Messages: messages}
+}
+
+func applyChatdReceiveState(state *nativeState, input EngineMessageInput, payloads []chatdEncPayload, update chatdSessionUpdate) bool {
+	if state == nil {
+		return false
+	}
+	changed := false
+	state.ensureMaps()
 	for _, payload := range payloads {
 		ref := payloadRefForEnc(input.WAAccountID, payload.Payload)
 		state.MessagePayloads[ref] = nativeMessagePayload{Sender: payload.Sender, EncType: payload.EncType, Path: payload.Path, Payload: b64u(payload.Payload)}
+		changed = true
 	}
-	_ = e.saveState(ctx, input.WorkspaceID, input.ClientProfileID, state)
-	return EngineMessageBatchResult{Messages: messages}
+	if applyChatdConnectionState(state, update) {
+		changed = true
+	}
+	return changed
+}
+
+func applyChatdConnectionState(state *nativeState, update chatdSessionUpdate) bool {
+	if state == nil {
+		return false
+	}
+	changed := false
+	if update.RoutingInfo != "" && state.ChatRoutingInfo != update.RoutingInfo {
+		state.ChatRoutingInfo = update.RoutingInfo
+		changed = true
+	}
+	if update.Endpoint.Host != "" && (state.ChatConnection.LastHost != update.Endpoint.Host || state.ChatConnection.LastPort != update.Endpoint.Port) {
+		state.ChatConnection.LastHost = update.Endpoint.Host
+		state.ChatConnection.LastPort = update.Endpoint.Port
+		changed = true
+	}
+	if update.ServerStaticPublic != "" && state.ChatConnection.ServerStaticPublic != update.ServerStaticPublic {
+		state.ChatConnection.ServerStaticPublic = update.ServerStaticPublic
+		changed = true
+	}
+	return changed
+}
+
+func chatRoutingInfoFromValue(value any) string {
+	switch typed := value.(type) {
+	case []byte:
+		if len(typed) == 0 || len(typed) > 256 {
+			return ""
+		}
+		return b64u(typed)
+	case string:
+		return normalizeChatRoutingInfo(typed)
+	default:
+		return ""
+	}
+}
+
+func chatdReceiveError(err error) error {
+	message := "native chatd receive failed"
+	if snippet := chatdSafeFailureMessage(err); snippet != "" {
+		message += ": " + snippet
+	}
+	return NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, message, true)
+}
+
+func chatdSafeFailureMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.ToLower(err.Error())
+	phase := chatdFailurePhase(text)
+	reason := chatdFailureReason(text)
+	switch {
+	case phase != "" && reason != "":
+		return phase + ": " + reason
+	case phase != "":
+		return phase
+	default:
+		return safeResponseSnippet(upstreamFailureMessage(nil, err))
+	}
+}
+
+func chatdFailurePhase(text string) string {
+	for _, phase := range []string{
+		"prepare chatd static identity",
+		"resolve chatd login identity",
+		"decode chatd routing info",
+		"chatd dial",
+		"chatd encode routing info",
+		"chatd write routing info",
+		"chatd write noise prologue",
+		"chatd flush noise prologue",
+		"chatd generate ephemeral",
+		"chatd write client hello",
+		"chatd read server hello",
+		"chatd parse server hello",
+		"chatd mix ee",
+		"chatd decrypt server static",
+		"chatd mix es",
+		"chatd decrypt server payload",
+		"chatd encrypt client static",
+		"chatd mix se",
+		"chatd encrypt login payload",
+		"chatd write client finish",
+		"chatd noise handshake",
+		"chatd ping write",
+		"chatd frame read",
+		"chatd ack write",
+		"chatd iq write",
+		"chatd iq read",
+	} {
+		if strings.Contains(text, phase) {
+			return phase + " failed"
+		}
+	}
+	return ""
+}
+
+func chatdFailureReason(text string) string {
+	switch {
+	case strings.Contains(text, "connection reset by peer"):
+		return "connection reset by peer"
+	case strings.Contains(text, "eof"):
+		return "EOF"
+	case strings.Contains(text, "i/o timeout") || strings.Contains(text, "deadline") || strings.Contains(text, "timeout"):
+		return "timeout"
+	case strings.Contains(text, "server returned goa"):
+		return "server returned GOA"
+	case strings.Contains(text, "message authentication failed") || strings.Contains(text, "authentication failed") || strings.Contains(text, "cipher"):
+		return "decrypt authentication failed"
+	case strings.Contains(text, "invalid list-size token"):
+		return chatdNodeTokenFailureReason(text, "invalid list-size token")
+	case strings.Contains(text, "readstring could not match token"):
+		return chatdNodeTokenFailureReason(text, "unsupported node string token")
+	case strings.Contains(text, "unexpected end of binary node"):
+		return "unexpected end of binary node"
+	case strings.Contains(text, "truncated"):
+		return "truncated binary node"
+	case strings.Contains(text, "fragmented stanza"):
+		return "fragmented stanza"
+	case strings.Contains(text, "zlib") || strings.Contains(text, "flate"):
+		return "compressed stanza decode failed"
+	case strings.Contains(text, "server static public length"):
+		return "invalid server static"
+	case strings.Contains(text, "server ephemeral length"):
+		return "invalid server ephemeral"
+	case strings.Contains(text, "no such host"):
+		return "DNS lookup failed"
+	case strings.Contains(text, "socks5 connect failed"):
+		return "SOCKS5 connect failed"
+	case strings.Contains(text, "proxy rejected"):
+		return "proxy rejected"
+	case strings.Contains(text, "tls"):
+		return "TLS handshake failed"
+	default:
+		return ""
+	}
+}
+
+func chatdNodeTokenFailureReason(text string, fallback string) string {
+	match := chatdNodeTokenErrorPattern.FindStringSubmatch(text)
+	if len(match) < 3 {
+		return fallback
+	}
+	return fallback + " " + match[2]
 }
 
 func (e *NativeEngine) DecryptMessage(ctx context.Context, input EngineDecryptInput) EngineDecryptResult {
@@ -425,7 +597,7 @@ func sanitizeResponse(data map[string]any) map[string]any {
 	out := map[string]any{}
 	for key, value := range data {
 		lower := strings.ToLower(key)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "key") || strings.Contains(lower, "auth") || strings.Contains(lower, "code") || strings.Contains(lower, "sig") {
+		if strings.Contains(lower, "token") || strings.Contains(lower, "key") || strings.Contains(lower, "auth") || strings.Contains(lower, "code") || strings.Contains(lower, "sig") || strings.Contains(lower, "routing") {
 			out[key] = "<redacted>"
 			continue
 		}

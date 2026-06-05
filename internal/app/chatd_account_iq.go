@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"net"
@@ -14,39 +13,19 @@ import (
 
 const defaultAccountIQTimeout = 32 * time.Second
 
-func (c *chatdClient) sendAccountIQ(ctx context.Context, state nativeState, input EngineAccountSettingsInput, appVersion string, request chatdNode) (chatdNode, error) {
-	state.ChatStatic = ensureChatStatic(state.ChatStatic)
-	privateKey, err := state.ChatStatic.privateBytes()
+func (c *chatdClient) sendAccountIQ(ctx context.Context, state nativeState, input EngineAccountSettingsInput, appVersion string, request chatdNode) (chatdNode, chatdSessionUpdate, error) {
+	session, err := c.openSession(ctx, state, input.RegisteredIdentityID, defaultLoginPayload, appVersion)
 	if err != nil {
-		return chatdNode{}, err
+		return chatdNode{}, chatdSessionUpdate{}, err
 	}
-	publicKey, err := state.ChatStatic.publicBytes()
-	if err != nil {
-		return chatdNode{}, err
-	}
-	identity, err := resolveLoginIdentity(input.RegisteredIdentityID, state)
-	if err != nil {
-		return chatdNode{}, err
-	}
-	conn, err := c.dial(ctx)
-	if err != nil {
-		return chatdNode{}, err
-	}
-	defer conn.Close()
+	defer session.Close()
+
+	conn := session.conn
+	transport := session.transport
+	update := session.update()
 	_ = conn.SetDeadline(time.Now().Add(c.cfg.Timeout))
-	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
-	routingInfo, err := decodeRoutingInfo(c.cfg.RoutingInfo)
-	if err != nil {
-		return chatdNode{}, err
-	}
-	loginPayload := defaultLoginPayload(identity, state, appVersion)
-	keys, err := doNoiseHandshake(rw, privateKey, publicKey, loginPayload, routingInfo, c.cfg.MaxFrameBytes)
-	if err != nil {
-		return chatdNode{}, err
-	}
-	transport := chatdTransport{rw: rw, keys: keys, codec: c.codec, maxFrameBytes: c.cfg.MaxFrameBytes}
 	if err := transport.sendNode(request); err != nil {
-		return chatdNode{}, err
+		return chatdNode{}, update, chatdPhase("chatd iq write", err)
 	}
 	deadline := time.Now().Add(c.cfg.Timeout)
 	requestID := request.Attrs["id"]
@@ -55,18 +34,23 @@ func (c *chatdClient) sendAccountIQ(ctx context.Context, state nativeState, inpu
 		node, err := transport.readNode()
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				return chatdNode{}, fmt.Errorf("account settings iq timed out")
+				return chatdNode{}, update, fmt.Errorf("account settings iq timed out")
 			}
-			return chatdNode{}, err
+			return chatdNode{}, update, chatdPhase("chatd iq read", err)
 		}
 		if ack, ok := buildAckForNode(node); ok {
-			_ = transport.sendNode(ack)
+			if err := transport.sendNode(ack); err != nil {
+				return chatdNode{}, update, chatdPhase("chatd ack write", err)
+			}
+		}
+		if nextRouting := routingInfoFromNode(node); nextRouting != "" {
+			update.RoutingInfo = nextRouting
 		}
 		if node.Tag == "iq" && node.Attrs["id"] == requestID {
-			return node, nil
+			return node, update, nil
 		}
 	}
-	return chatdNode{}, fmt.Errorf("account settings iq timed out")
+	return chatdNode{}, update, fmt.Errorf("account settings iq timed out")
 }
 
 func chatdIQError(node chatdNode) error {

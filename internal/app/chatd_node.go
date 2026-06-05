@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -57,13 +58,17 @@ func fallbackTokenDictionary() *tokenDictionary {
 		29:  "enc",
 		30:  "urn:xmpp:whatsapp:push",
 		31:  "presence",
+		39:  "routing_info",
+		40:  "edge_routing",
 		41:  "get",
 		42:  "read",
 		43:  "urn:xmpp:ping",
 		48:  "unavailable",
 		50:  "skmsg",
 		52:  "composing",
-		75:  "success",
+		65:  "count",
+		75:  "abprops",
+		76:  "success",
 		77:  "msg",
 		83:  "pkmsg",
 		86:  "ping",
@@ -73,17 +78,54 @@ func fallbackTokenDictionary() *tokenDictionary {
 		117: "lid",
 		123: "delivery",
 		129: "fail",
+		157: "stream:error",
+		168: "error",
+		203: "encrypt",
 	}
 	reverse := map[string]tokenRef{}
 	for idx, value := range known {
 		values[idx] = value
 		reverse[value] = tokenRef{prefix: -1, index: idx}
 	}
-	return &tokenDictionary{primary: values, secondary: [][]string{{}, {}, {}, {}}, reverse: reverse}
+	secondary := [][]string{
+		tokenDictionaryBucket(map[int]string{
+			14:  "conflict",
+			123: "notice",
+		}),
+		tokenDictionaryBucket(map[int]string{
+			1: "dirty",
+		}),
+		tokenDictionaryBucket(map[int]string{
+			60: "failure",
+		}),
+		{},
+	}
+	for bucket, values := range secondary {
+		for idx, value := range values {
+			if value != "" {
+				reverse[value] = tokenRef{prefix: 236 + bucket, index: idx}
+			}
+		}
+	}
+	return &tokenDictionary{primary: values, secondary: secondary, reverse: reverse}
+}
+
+func tokenDictionaryBucket(values map[int]string) []string {
+	maxIndex := 0
+	for idx := range values {
+		if idx > maxIndex {
+			maxIndex = idx
+		}
+	}
+	out := make([]string, maxIndex+1)
+	for idx, value := range values {
+		out[idx] = value
+	}
+	return out
 }
 
 func (d *tokenDictionary) get(token int, r *bytes.Reader) (string, error) {
-	if token >= 3 && token < 236 {
+	if token > 0 && token < 236 {
 		if token < len(d.primary) && d.primary[token] != "" {
 			return d.primary[token], nil
 		}
@@ -175,7 +217,7 @@ func (c *binaryNodeCodec) readString(r *bytes.Reader, token int) (string, bool, 
 	if token == 0 {
 		return "", false, nil
 	}
-	if token >= 3 && token < 236 || token >= 236 && token <= 239 {
+	if token > 0 && token < 236 || token >= 236 && token <= 239 {
 		value, err := c.dictionary.get(token, r)
 		return value, true, err
 	}
@@ -383,7 +425,8 @@ func (c *binaryNodeCodec) writeNode(out *bytes.Buffer, node chatdNode) error {
 	if err := c.dictionary.encodeString(out, node.Tag, false); err != nil {
 		return err
 	}
-	for key, value := range node.Attrs {
+	for _, key := range orderedNodeAttrKeys(node.Attrs) {
+		value := node.Attrs[key]
 		if err := c.dictionary.encodeString(out, key, false); err != nil {
 			return err
 		}
@@ -411,6 +454,30 @@ func (c *binaryNodeCodec) writeNode(out *bytes.Buffer, node chatdNode) error {
 		return c.dictionary.encodeString(out, fmt.Sprint(value), true)
 	}
 	return nil
+}
+
+func orderedNodeAttrKeys(attrs map[string]string) []string {
+	if len(attrs) == 0 {
+		return nil
+	}
+	remaining := map[string]struct{}{}
+	for key := range attrs {
+		remaining[key] = struct{}{}
+	}
+	preferred := []string{"id", "type", "to", "xmlns", "from", "participant", "class"}
+	out := make([]string, 0, len(attrs))
+	for _, key := range preferred {
+		if _, ok := remaining[key]; ok {
+			out = append(out, key)
+			delete(remaining, key)
+		}
+	}
+	rest := make([]string, 0, len(remaining))
+	for key := range remaining {
+		rest = append(rest, key)
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 func writeListSize(out *bytes.Buffer, size int) error {
@@ -540,6 +607,44 @@ func iterEncPayloads(node chatdNode) []chatdEncPayload {
 	return out
 }
 
+func routingInfoFromNode(node chatdNode) string {
+	var found string
+	var walk func(chatdNode)
+	walk = func(current chatdNode) {
+		if found != "" {
+			return
+		}
+		if current.Tag == "routing_info" {
+			found = routingInfoFromContent(current.Content)
+			return
+		}
+		if children, ok := current.Content.([]chatdNode); ok {
+			for _, child := range children {
+				walk(child)
+				if found != "" {
+					return
+				}
+			}
+		}
+	}
+	walk(node)
+	return found
+}
+
+func routingInfoFromContent(content any) string {
+	switch value := content.(type) {
+	case []byte:
+		if len(value) == 0 || len(value) > 256 {
+			return ""
+		}
+		return b64u(value)
+	case string:
+		return normalizeChatRoutingInfo(value)
+	default:
+		return ""
+	}
+}
+
 func nodePayloadSummary(node chatdNode) string {
 	if len(node.Attrs) == 0 {
 		return node.Tag
@@ -548,6 +653,32 @@ func nodePayloadSummary(node chatdNode) string {
 	parts = append(parts, node.Tag)
 	for key, value := range node.Attrs {
 		parts = append(parts, key+"="+value)
+	}
+	return strings.Join(parts, " ")
+}
+
+func isChatdTerminalNode(node chatdNode) bool {
+	switch node.Tag {
+	case "stream:error", "failure", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func controlNodeSummary(node chatdNode) string {
+	parts := []string{node.Tag}
+	for _, key := range []string{"type", "code", "class", "xmlns"} {
+		if value := strings.TrimSpace(node.Attrs[key]); value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	if children, ok := node.Content.([]chatdNode); ok && len(children) > 0 {
+		tags := make([]string, 0, len(children))
+		for _, child := range children {
+			tags = append(tags, child.Tag)
+		}
+		parts = append(parts, "children="+strings.Join(tags, ","))
 	}
 	return strings.Join(parts, " ")
 }

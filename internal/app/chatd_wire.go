@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,7 +21,10 @@ const (
 	waRoutingPrefix = "ED\x00\x01"
 )
 
-var noiseXXName = []byte("Noise_XX_25519_AESGCM_SHA256")
+var (
+	noiseXXName                 = []byte("Noise_XX_25519_AESGCM_SHA256")
+	chatdUserAgentHeaderPattern = regexp.MustCompile(`^WhatsApp/([0-9.]+)\s+Android/([^ ]+)\s+Device/([^- \t/]+)-([^/\s]+)$`)
+)
 
 type chatdError struct{ message string }
 
@@ -212,6 +216,24 @@ func firstPBVarint(fields map[int][]pbValue, fieldNo int, label string, defaultV
 	return 0, newChatdError("missing protobuf varint field %d (%s)", fieldNo, label)
 }
 
+func optionalPBBytes(fields map[int][]pbValue, fieldNo int) []byte {
+	for _, value := range fields[fieldNo] {
+		if value.wireType == 2 {
+			return append([]byte{}, value.bytes...)
+		}
+	}
+	return nil
+}
+
+func optionalPBVarint(fields map[int][]pbValue, fieldNo int) (uint64, bool) {
+	for _, value := range fields[fieldNo] {
+		if value.wireType == 0 {
+			return value.varint, true
+		}
+	}
+	return 0, false
+}
+
 func allPBBytes(fields map[int][]pbValue, fieldNo int) [][]byte {
 	values := fields[fieldNo]
 	out := make([][]byte, 0, len(values))
@@ -229,8 +251,14 @@ type serverHello struct {
 	payloadCiphertext []byte
 }
 
-func buildClientHello(ephemeralPublic []byte) []byte {
-	return pbBytesField(2, pbBytesField(1, ephemeralPublic))
+type clientHelloMessage struct {
+	ephemeral []byte
+}
+
+func buildClientHello(message clientHelloMessage) []byte {
+	out := []byte{}
+	out = append(out, pbBytesField(1, message.ephemeral)...)
+	return pbBytesField(2, out)
 }
 
 func parseServerHello(wrapper []byte) (serverHello, error) {
@@ -250,19 +278,22 @@ func parseServerHello(wrapper []byte) (serverHello, error) {
 	if err != nil {
 		return serverHello{}, err
 	}
-	staticCiphertext, err := firstPBBytes(fields, 2, "static")
-	if err != nil {
-		return serverHello{}, err
-	}
 	payloadCiphertext, err := firstPBBytes(fields, 3, "payload")
 	if err != nil {
 		return serverHello{}, err
 	}
-	return serverHello{ephemeral: ephemeral, staticCiphertext: staticCiphertext, payloadCiphertext: payloadCiphertext}, nil
+	return serverHello{
+		ephemeral:         ephemeral,
+		staticCiphertext:  optionalPBBytes(fields, 2),
+		payloadCiphertext: payloadCiphertext,
+	}, nil
 }
 
 func buildClientFinish(staticCiphertext []byte, payloadCiphertext []byte) []byte {
-	return pbBytesField(4, append(pbBytesField(1, staticCiphertext), pbBytesField(2, payloadCiphertext)...))
+	out := []byte{}
+	out = append(out, pbBytesField(1, staticCiphertext)...)
+	out = append(out, pbBytesField(2, payloadCiphertext)...)
+	return pbBytesField(4, out)
 }
 
 type noiseXXState struct {
@@ -272,12 +303,21 @@ type noiseXXState struct {
 	nonce         uint64
 }
 
-func newNoiseXXState() *noiseXXState {
-	name := make([]byte, 32)
-	copy(name, noiseXXName)
+func newNoiseState(handshakeName []byte) *noiseXXState {
+	name := normalizeNoiseHandshakeName(handshakeName)
 	state := &noiseXXState{chainingKey: append([]byte{}, name...), handshakeHash: append([]byte{}, name...)}
 	state.mixHash([]byte(waNoisePrologue))
 	return state
+}
+
+func normalizeNoiseHandshakeName(handshakeName []byte) []byte {
+	if len(handshakeName) > 32 {
+		sum := sha256.Sum256(handshakeName)
+		return append([]byte{}, sum[:]...)
+	}
+	out := make([]byte, 32)
+	copy(out, handshakeName)
+	return out
 }
 
 func (s *noiseXXState) mixHash(data []byte) {
@@ -355,78 +395,86 @@ func doNoiseHandshake(rw *bufio.ReadWriter, clientStaticPrivate []byte, clientSt
 	if len(routingInfo) > 0 {
 		header, err := chatdInt24(len(routingInfo))
 		if err != nil {
-			return nil, err
+			return nil, chatdPhase("chatd encode routing info", err)
 		}
 		if _, err := rw.Write(append(append([]byte(waRoutingPrefix), header...), routingInfo...)); err != nil {
-			return nil, err
+			return nil, chatdPhase("chatd write routing info", err)
 		}
 	}
 	if _, err := rw.Write([]byte(waNoisePrologue)); err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd write noise prologue", err)
 	}
 	if err := rw.Flush(); err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd flush noise prologue", err)
 	}
 	clientEphemeralPrivate := make([]byte, curve25519.ScalarSize)
 	if _, err := io.ReadFull(rand.Reader, clientEphemeralPrivate); err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd generate ephemeral", err)
 	}
 	clientEphemeralPublic, err := curve25519.X25519(clientEphemeralPrivate, curve25519.Basepoint)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd generate ephemeral", err)
 	}
-	noise := newNoiseXXState()
+	return doNoiseXXHandshake(rw, clientStaticPrivate, clientStaticPublic, loginPayload, maxFrameBytes, clientEphemeralPrivate, clientEphemeralPublic)
+}
+
+func doNoiseXXHandshake(rw *bufio.ReadWriter, clientStaticPrivate []byte, clientStaticPublic []byte, loginPayload []byte, maxFrameBytes int, clientEphemeralPrivate []byte, clientEphemeralPublic []byte) (*chatdTransportKeys, error) {
+	noise := newNoiseState(noiseXXName)
 	noise.mixHash(clientEphemeralPublic)
-	if err := chatdWriteFrame(rw.Writer, buildClientHello(clientEphemeralPublic)); err != nil {
-		return nil, err
+	if err := chatdWriteFrame(rw.Writer, buildClientHello(clientHelloMessage{ephemeral: clientEphemeralPublic})); err != nil {
+		return nil, chatdPhase("chatd write client hello", err)
 	}
 	serverWrapper, err := chatdReadFrame(rw.Reader, maxFrameBytes)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd read server hello", err)
 	}
 	hello, err := parseServerHello(serverWrapper)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd parse server hello", err)
 	}
 	if len(hello.ephemeral) != curve25519.PointSize {
 		return nil, newChatdError("server ephemeral length is %d", len(hello.ephemeral))
 	}
+	if len(hello.staticCiphertext) == 0 {
+		return nil, newChatdError("server hello is missing static ciphertext")
+	}
 	noise.mixHash(hello.ephemeral)
 	ee, err := nativeX25519Agree(clientEphemeralPrivate, hello.ephemeral)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd mix ee", err)
 	}
 	noise.mixKey(ee)
 	serverStaticPublic, err := noise.decryptAndHash(hello.staticCiphertext)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd decrypt server static", err)
 	}
 	if len(serverStaticPublic) != curve25519.PointSize {
 		return nil, newChatdError("server static public length is %d", len(serverStaticPublic))
 	}
 	es, err := nativeX25519Agree(clientEphemeralPrivate, serverStaticPublic)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd mix es", err)
 	}
 	noise.mixKey(es)
-	if _, err := noise.decryptAndHash(hello.payloadCiphertext); err != nil {
-		return nil, err
+	_, err = noise.decryptAndHash(hello.payloadCiphertext)
+	if err != nil {
+		return nil, chatdPhase("chatd decrypt server payload", err)
 	}
 	encryptedStatic, err := noise.encryptAndHash(clientStaticPublic)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd encrypt client static", err)
 	}
 	se, err := nativeX25519Agree(clientStaticPrivate, hello.ephemeral)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd mix se", err)
 	}
 	noise.mixKey(se)
 	encryptedPayload, err := noise.encryptAndHash(loginPayload)
 	if err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd encrypt login payload", err)
 	}
 	if err := chatdWriteFrame(rw.Writer, buildClientFinish(encryptedStatic, encryptedPayload)); err != nil {
-		return nil, err
+		return nil, chatdPhase("chatd write client finish", err)
 	}
 	sendKey, recvKey := noise.split()
 	return &chatdTransportKeys{sendKey: sendKey, recvKey: recvKey, serverStaticPublic: serverStaticPublic}, nil
@@ -543,7 +591,16 @@ func passiveLoginCheckPayload(identity loginIdentity, state nativeState, version
 }
 
 func loginPayload(identity loginIdentity, state nativeState, version string, passive bool, shortConnect bool) []byte {
-	ua := userAgentConfig{
+	ua := chatdUserAgentForState(state, version)
+	buf := make([]byte, 8)
+	_, _ = io.ReadFull(rand.Reader, buf)
+	sessionID := binary.BigEndian.Uint64(buf)&0x7fffffff + 1
+	cfg := loginPayloadConfig{sessionID: sessionID, passive: passive, shortConnect: shortConnect, connectType: 1, connectReason: 1, product: 0, oc: true, lc: 0}
+	return buildLoginPayload(identity, ua, cfg)
+}
+
+func chatdUserAgentForState(state nativeState, version string) userAgentConfig {
+	cfg := userAgentConfig{
 		version:       firstNonEmpty(version, defaultWAAppVersion),
 		osVersion:     "13",
 		manufacturer:  "samsung",
@@ -553,14 +610,20 @@ func loginPayload(identity loginIdentity, state nativeState, version string, pas
 		localeLang:    "en",
 		localeCountry: "US",
 		deviceBoard:   "lahaina",
-		deviceExpID:   state.Profile.ExpID,
+		deviceExpID:   firstNonEmpty(state.Profile.ExpIDUUID, state.Profile.ExpID),
 		modelType:     "phone",
 	}
-	buf := make([]byte, 8)
-	_, _ = io.ReadFull(rand.Reader, buf)
-	sessionID := binary.BigEndian.Uint64(buf)&0x7fffffff + 1
-	cfg := loginPayloadConfig{sessionID: sessionID, passive: passive, shortConnect: shortConnect, connectType: 1, connectReason: 1, product: 0, oc: true, lc: 0}
-	return buildLoginPayload(identity, ua, cfg)
+	if match := chatdUserAgentHeaderPattern.FindStringSubmatch(firstNonEmpty(state.UserAgent, state.Profile.UserAgent)); len(match) == 5 {
+		cfg.version = match[1]
+		cfg.osVersion = match[2]
+		cfg.manufacturer = match[3]
+		cfg.device = match[4]
+	}
+	if state.Profile.AdditionalMapFields != nil {
+		cfg.mcc = state.Profile.AdditionalMapFields["mcc"]
+		cfg.mnc = state.Profile.AdditionalMapFields["mnc"]
+	}
+	return cfg
 }
 
 func compressMaybeDecodeNodePayload(plaintext []byte) ([]byte, error) {

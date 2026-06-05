@@ -27,6 +27,7 @@ type Server struct {
 	ids     IDGenerator
 
 	proxyRuntime      *DynamicProxyRuntime
+	longProxyUsername string
 	platformPublisher eventbus.Publisher
 	accountPublisher  *accountevent.Publisher
 	longConnections   *LongConnectionManager
@@ -46,6 +47,10 @@ func NewServer(store Store, runtime RuntimeState, runner ProtocolEngine, clock C
 
 func (s *Server) SetDynamicProxyRuntime(proxyRuntime *DynamicProxyRuntime) {
 	s.proxyRuntime = proxyRuntime
+}
+
+func (s *Server) SetLongConnectionProxyUsername(username string) {
+	s.longProxyUsername = strings.TrimSpace(username)
 }
 
 func (s *Server) SetPlatformPublisher(publisher eventbus.Publisher) {

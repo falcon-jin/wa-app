@@ -34,6 +34,8 @@ type nativeState struct {
 	LastCodeResult  map[string]any                  `json:"last_code_result,omitempty"`
 	LastRegister    map[string]any                  `json:"last_register,omitempty"`
 	RegistrationJID string                          `json:"registration_jid,omitempty"`
+	ChatRoutingInfo string                          `json:"chat_routing_info,omitempty"`
+	ChatConnection  nativeChatConnectionState       `json:"chat_connection,omitempty"`
 	ChatStatic      nativeCurveKeyPair              `json:"chat_static"`
 	Signal          nativeSignalState               `json:"signal"`
 	MessagePayloads map[string]nativeMessagePayload `json:"message_payloads,omitempty"`
@@ -107,6 +109,12 @@ type nativeMessagePayload struct {
 	EncType string `json:"enc_type,omitempty"`
 	Path    string `json:"path,omitempty"`
 	Payload string `json:"payload"`
+}
+
+type nativeChatConnectionState struct {
+	LastHost           string `json:"last_host,omitempty"`
+	LastPort           int    `json:"last_port,omitempty"`
+	ServerStaticPublic string `json:"server_static_public,omitempty"`
 }
 
 func (s nativeState) codeParams() map[string]string {

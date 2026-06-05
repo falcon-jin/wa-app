@@ -24,8 +24,11 @@ func (e *NativeEngine) ApplyAccountSettings(ctx context.Context, input EngineAcc
 	if request.Tag == "" {
 		return EngineAccountSettingsResult{Status: waappv1.AccountSettingsOperationStatus_ACCOUNT_SETTINGS_OPERATION_STATUS_REJECTED, Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_UNSUPPORTED_OPERATION, "account settings operation is not supported", false)}
 	}
-	client := newChatdClient(chatdClientConfig{ProxyURL: proxyURL, Timeout: defaultAccountIQTimeout})
-	response, err := client.sendAccountIQ(ctx, state, input, defaultWAAppVersion, request)
+	client := newChatdClient(chatdConfigForState(proxyURL, state, defaultAccountIQTimeout))
+	response, update, err := client.sendAccountIQ(ctx, state, input, defaultWAAppVersion, request)
+	if applyChatdConnectionState(&state, update) {
+		_ = e.saveState(ctx, input.WorkspaceID, input.ClientProfileID, state)
+	}
 	if err != nil {
 		return EngineAccountSettingsResult{Status: waappv1.AccountSettingsOperationStatus_ACCOUNT_SETTINGS_OPERATION_STATUS_REJECTED, Err: NewError(waappv1.WaErrorCode_WA_ERROR_CODE_REJECTED, "native account settings request failed", accountSettingsRetryableError(err))}
 	}

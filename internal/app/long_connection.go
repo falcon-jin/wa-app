@@ -165,16 +165,14 @@ func (m *LongConnectionManager) runEntry(ctx context.Context, workspaceID string
 			reconnects++
 			continue
 		}
-		backoff = 2 * time.Second
 		m.update(key, func(snapshot *waappv1.LongConnectionState) {
 			snapshot.MessageSessionId = session.GetMessageSessionId()
-			snapshot.Status = waappv1.LongConnectionStatus_LONG_CONNECTION_STATUS_CONNECTED
-			snapshot.LastConnectedAt = timestamppb.New(m.server.clock.Now())
 			snapshot.LastError = nil
 		})
-		runner, err := m.server.longConnectionRunner(ctx)
+		runner, err := m.server.longConnectionRunner(ctx, loginState)
 		if err != nil {
 			m.recordLoopError(key, reconnects, err)
+			_, _ = m.server.CloseMessageSession(context.WithoutCancel(ctx), &waappv1.CloseMessageSessionRequest{Context: &waappv1.RequestContext{WorkspaceId: workspaceID}, MessageSessionId: session.GetMessageSessionId(), Reason: "long connection runner unavailable"})
 			if !sleepContext(ctx, backoff) {
 				return
 			}
@@ -183,6 +181,7 @@ func (m *LongConnectionManager) runEntry(ctx context.Context, workspaceID string
 			continue
 		}
 		m.decryptPendingMessages(ctx, workspaceID, session, runner)
+		receivedHeartbeat := false
 		for ctx.Err() == nil {
 			resp, err := m.server.receiveMessageBatch(ctx, &waappv1.ReceiveMessageBatchRequest{Context: &waappv1.RequestContext{WorkspaceId: workspaceID, RequestId: m.server.ids.NewID("wa-rx_"), CorrelationId: loginState.GetLoginStateId()}, MessageSessionId: session.GetMessageSessionId(), MaxMessages: 10, WaitTimeout: durationpb.New(longConnectionWaitTimeout)}, runner)
 			if err != nil {
@@ -196,6 +195,9 @@ func (m *LongConnectionManager) runEntry(ctx context.Context, workspaceID string
 			now := m.server.clock.Now()
 			messages := resp.GetMessages()
 			m.update(key, func(snapshot *waappv1.LongConnectionState) {
+				if snapshot.GetStatus() != waappv1.LongConnectionStatus_LONG_CONNECTION_STATUS_CONNECTED && snapshot.GetStatus() != waappv1.LongConnectionStatus_LONG_CONNECTION_STATUS_HEARTBEAT_WAITING {
+					snapshot.LastConnectedAt = timestamppb.New(now)
+				}
 				snapshot.Status = waappv1.LongConnectionStatus_LONG_CONNECTION_STATUS_HEARTBEAT_WAITING
 				snapshot.LastHeartbeatAt = timestamppb.New(now)
 				snapshot.LastError = nil
@@ -204,17 +206,29 @@ func (m *LongConnectionManager) runEntry(ctx context.Context, workspaceID string
 					snapshot.LastMessageAt = timestamppb.New(now)
 				}
 			})
+			receivedHeartbeat = true
+			backoff = 2 * time.Second
 			m.decryptReceivedMessages(ctx, workspaceID, session, messages, runner)
 		}
 		if ctx.Err() != nil {
+			closeLongConnectionRunner(runner)
 			return
+		}
+		closeLongConnectionRunner(runner)
+		if !receivedHeartbeat {
+			backoff = nextBackoff(backoff)
 		}
 		reconnects++
 		_, _ = m.server.CloseMessageSession(context.WithoutCancel(ctx), &waappv1.CloseMessageSessionRequest{Context: &waappv1.RequestContext{WorkspaceId: workspaceID}, MessageSessionId: session.GetMessageSessionId(), Reason: "long connection reconnect"})
 		if !sleepContext(ctx, backoff) {
 			return
 		}
-		backoff = nextBackoff(backoff)
+	}
+}
+
+func closeLongConnectionRunner(runner ProtocolEngine) {
+	if closer, ok := runner.(interface{ Close() error }); ok {
+		_ = closer.Close()
 	}
 }
 
@@ -268,6 +282,17 @@ func (m *LongConnectionManager) recordLoopError(key string, reconnects int32, er
 		snapshot.ReconnectCount = reconnects
 		snapshot.LastError = ToProtoError(err)
 	})
+	if reconnects < 5 || reconnects%20 == 0 {
+		protoErr := ToProtoError(err)
+		log.Printf("WA long connection reconnecting count=%d code=%s retryable=%t message=%s", reconnects, protoErr.GetCode().String(), protoErr.GetRetryable(), longConnectionLogErrorMessage(protoErr.GetMessage()))
+	}
+}
+
+func longConnectionLogErrorMessage(message string) string {
+	if strings.HasPrefix(message, "native chatd receive failed:") || strings.HasPrefix(message, "login state remote check failed:") {
+		return message
+	}
+	return safeResponseSnippet(message)
 }
 
 func (m *LongConnectionManager) update(key string, mutate func(*waappv1.LongConnectionState)) {
@@ -307,15 +332,22 @@ func (s *Server) ensureLongConnection(ctx context.Context, workspaceID string, l
 	}
 }
 
-func (s *Server) longConnectionRunner(ctx context.Context) (ProtocolEngine, error) {
+func (s *Server) longConnectionRunner(ctx context.Context, _ *waappv1.LoginState) (ProtocolEngine, error) {
 	engine, ok := s.runner.(*NativeEngine)
-	if !ok || strings.TrimSpace(engine.activeProxyURL) != "" {
+	if !ok {
 		return s.runner, nil
+	}
+	if strings.TrimSpace(engine.activeProxyURL) != "" {
+		return newLongConnectionNativeEngine(engine), nil
 	}
 	if s.proxyRuntime == nil {
 		return nil, NewError(waappv1.WaErrorCode_WA_ERROR_CODE_VALIDATION_FAILED, "PROXY_RUNTIME_API_BASE_URL is required", false)
 	}
-	proxyURL, err := s.proxyRuntime.FixedProxyURL(ctx)
+	username := strings.TrimSpace(s.longProxyUsername)
+	if username == "" {
+		return nil, NewError(waappv1.WaErrorCode_WA_ERROR_CODE_VALIDATION_FAILED, "WA_LONG_CONNECTION_PROXY_USERNAME is required", false)
+	}
+	proxyURL, err := s.proxyRuntime.GatewayProxyURL(ctx, username)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +355,7 @@ func (s *Server) longConnectionRunner(ctx context.Context) (ProtocolEngine, erro
 	if err != nil {
 		return nil, err
 	}
-	return proxyEngine, nil
+	return newLongConnectionNativeEngine(proxyEngine), nil
 }
 
 func longConnectionKey(workspaceID string, loginState *waappv1.LoginState) string {

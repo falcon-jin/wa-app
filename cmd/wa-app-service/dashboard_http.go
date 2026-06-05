@@ -351,7 +351,6 @@ func (s *dashboardHTTP) acquireUSDynamicProxy(ctx context.Context, payload map[s
 			"strategy":                     "PROXY_SELECTOR_STRATEGY_HASH_TARGET_HOST",
 			"max_attempts":                 1,
 			"allow_direct_dynamic_gateway": true,
-			"prefer_line_proxy":            false,
 		},
 	}
 	data, _ := json.Marshal(requestBody)
