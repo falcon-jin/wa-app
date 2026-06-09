@@ -52,8 +52,10 @@ export function getWaClientProfiles(waAccountId: string, cursor = '') {
   return api<ListClientProfilesResponse>(`/api/wa/client-profiles?${params}`);
 }
 
-export function markWaMessagesRead(waAccountId: string, accountMessageIds: string[], localOnly = false) {
-  return api<MarkAccountMessagesReadResponse>('/api/wa/messages/read', { method: 'POST', body: JSON.stringify({ wa_account_id: waAccountId, account_message_ids: accountMessageIds, local_only: localOnly }) });
+export type MarkWaMessagesReadInput = { accountMessageIds?: string[]; contactRef?: string; localOnly?: boolean };
+
+export function markWaMessagesRead(waAccountId: string, input: MarkWaMessagesReadInput) {
+  return api<MarkAccountMessagesReadResponse>('/api/wa/messages/read', { method: 'POST', body: JSON.stringify({ wa_account_id: waAccountId, account_message_ids: input.accountMessageIds || [], contact_ref: input.contactRef || '', local_only: Boolean(input.localOnly) }) });
 }
 
 export function deleteWaMessagesForMe(waAccountId: string, accountMessageIds: string[]) {

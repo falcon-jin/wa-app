@@ -10,6 +10,8 @@ import { WaChatThread } from './wa-chat-thread';
 import { WaContactList } from './wa-contact-list';
 import { waContactPath } from './wa-route-paths';
 
+type MarkReadInput = { messageIDs?: string[]; contactID?: string };
+
 export function WaInbox({ account, connection, contactID }: { account: WAAccount; connection?: LongConnectionState; contactID: string }) {
   const accountID = waAccountID(account);
   const queryClient = useQueryClient();
@@ -22,16 +24,16 @@ export function WaInbox({ account, connection, contactID }: { account: WAAccount
   const contacts = baseContacts;
   const activeContact = contacts.find((contact) => contact.id === activeContactID);
   const threadEvents = events;
-  const refreshMessageViews = async () => {
-    await Promise.all([queryClient.invalidateQueries({ queryKey: waKeys.messages(accountID, activeContactID) }), queryClient.invalidateQueries({ queryKey: waKeys.contacts(accountID) }), queryClient.invalidateQueries({ queryKey: waKeys.otpMessages(accountID) })]);
+  const refreshMessageViews = async (messageContactID = activeContactID) => {
+    await Promise.all([queryClient.invalidateQueries({ queryKey: waKeys.messages(accountID, messageContactID) }), queryClient.invalidateQueries({ queryKey: waKeys.contacts(accountID) }), queryClient.invalidateQueries({ queryKey: waKeys.otpMessages(accountID) })]);
   };
   const markReadMutation = useMutation({
-    mutationFn: async (messageIDs: string[]) => {
-      const resp = await markWaMessagesRead(accountID, messageIDs);
+    mutationFn: async (input: MarkReadInput) => {
+      const resp = await markWaMessagesRead(accountID, { accountMessageIds: input.messageIDs, contactRef: input.contactID });
       if (resp.error?.message) throw new Error(resp.error.message);
       return resp;
     },
-    onSettled: refreshMessageViews,
+    onSettled: (_data, _error, input) => refreshMessageViews(input.contactID || activeContactID),
   });
   const deleteMutation = useMutation({
     mutationFn: async (messageID: string) => {
@@ -39,7 +41,7 @@ export function WaInbox({ account, connection, contactID }: { account: WAAccount
       if (resp.error?.message) throw new Error(resp.error.message);
       return resp;
     },
-    onSettled: refreshMessageViews,
+    onSettled: () => refreshMessageViews(),
   });
   const deleteContactMutation = useMutation({
     mutationFn: async (deleteContactID: string) => {
@@ -47,21 +49,25 @@ export function WaInbox({ account, connection, contactID }: { account: WAAccount
       if (resp.error?.message) throw new Error(resp.error.message);
       return resp;
     },
-    onSettled: refreshMessageViews,
+    onSettled: () => refreshMessageViews(),
   });
   const error = messagesQuery.data?.error?.message || contactsQuery.data?.error?.message || mutationError(markReadMutation.error) || mutationError(deleteMutation.error) || mutationError(deleteContactMutation.error);
   if (activeContactID && activeContactID !== contactID) return <Navigate to={waContactPath(accountID, activeContactID)} replace />;
   return (
     <section className="grid h-dvh min-h-0 md:grid-cols-[320px_minmax(0,1fr)]">
-      <WaContactList accountID={accountID} contacts={contacts} selectedID={activeContactID} loading={contactsQuery.isLoading} error={error} deletingID={deleteContactMutation.variables} onDeleteContact={(id) => deleteContact(id, deleteContactMutation.mutate)} />
+      <WaContactList accountID={accountID} contacts={contacts} selectedID={activeContactID} loading={contactsQuery.isLoading} error={error} deletingID={deleteContactMutation.variables} onOpenContact={(id) => openContact(id, markReadMutation.mutate)} onDeleteContact={(id) => deleteContact(id, deleteContactMutation.mutate)} />
       <WaChatThread account={account} connection={connection} contact={activeContact} events={threadEvents} loading={messagesQuery.isFetching || contactsQuery.isFetching} error={error} actionBusy={markReadMutation.isPending || deleteMutation.isPending} onMarkRead={() => markThreadRead(threadEvents, markReadMutation.mutate)} onDeleteMessage={(messageID) => deleteMessageForMe(messageID, deleteMutation.mutate)} />
     </section>
   );
 }
 
-function markThreadRead(events: ReturnType<typeof buildWaChatEvents>, mutate: (messageIDs: string[]) => void) {
+function markThreadRead(events: ReturnType<typeof buildWaChatEvents>, mutate: (input: MarkReadInput) => void) {
   const ids = events.filter(isUnreadChatEvent).map((event) => event.id);
-  if (ids.length > 0) mutate(ids);
+  if (ids.length > 0) mutate({ messageIDs: ids });
+}
+
+function openContact(contactID: string, mutate: (input: MarkReadInput) => void) {
+  if (contactID) mutate({ contactID });
 }
 
 function deleteMessageForMe(messageID: string, mutate: (messageID: string) => void) {

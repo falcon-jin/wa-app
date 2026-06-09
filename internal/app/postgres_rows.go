@@ -332,6 +332,14 @@ func (r messageRow) toProto() *waappv1.InboundMessage {
 	}
 }
 
+func scanPostgresInboundMessage(scanner interface{ Scan(...any) error }) (*waappv1.InboundMessage, error) {
+	var r messageRow
+	if err := scanner.Scan(&r.id, &r.sessionID, &r.kind, &r.encryptionState, &r.ackStatus, &r.contactRef, &r.senderRef, &r.payloadRef, &r.providerMessageID, &r.providerTimestamp, &r.readAt, &r.deleteStatus, &r.deletedAt, &r.errCode, &r.errMessage, &r.errRetryable, &r.receivedAt); err != nil {
+		return nil, err
+	}
+	return r.toProto(), nil
+}
+
 func messageDeleteStatus(value string) waappv1.MessageDeleteStatus {
 	if value == "" {
 		return waappv1.MessageDeleteStatus_MESSAGE_DELETE_STATUS_NOT_DELETED

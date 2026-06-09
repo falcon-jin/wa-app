@@ -175,7 +175,7 @@ func fallbackWAContactDisplayName(kind waappv1.WAContactKind, jid string, number
 	case waappv1.WAContactKind_WA_CONTACT_KIND_GROUP:
 		return fallbackContactName("群组", local)
 	case waappv1.WAContactKind_WA_CONTACT_KIND_BUSINESS:
-		return fallbackContactName("企业账号", local)
+		return fallbackContactName("联系人", local)
 	case waappv1.WAContactKind_WA_CONTACT_KIND_INTEROP:
 		return fallbackContactName("互通联系人", local)
 	case waappv1.WAContactKind_WA_CONTACT_KIND_SYSTEM:

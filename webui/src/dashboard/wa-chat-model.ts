@@ -128,8 +128,7 @@ function recordTitle(record: WAContactRecord) {
 }
 
 function recordSubtitle(record: WAContactRecord) {
-  if (record.kind === WAContactKind.WA_CONTACT_KIND_GROUP) return '群组';
-  if (record.kind === WAContactKind.WA_CONTACT_KIND_BUSINESS || record.verified_name) return '企业账号';
+  if (record.kind === WAContactKind.WA_CONTACT_KIND_SYSTEM) return '';
   if (record.number) return `+${record.number}`;
   if (record.jid?.endsWith('@lid')) return 'WA 联系人';
   return sourcePartyLabel(record.jid);
@@ -159,7 +158,7 @@ function messageStateLabel(state?: MessageEncryptionState) {
 
 function safeContactName(value?: string) {
   const name = (value || '').trim();
-  if (!name || name === '未知联系人' || name.startsWith('LID ')) return '';
+  if (!name || name === '未知联系人' || name.startsWith('LID ') || name.startsWith('企业账号 ')) return '';
   return name;
 }
 

@@ -290,6 +290,7 @@ func (s *dashboardHTTP) handleMarkMessagesRead(w http.ResponseWriter, r *http.Re
 		WaAccountId:       textField(payload, "wa_account_id"),
 		AccountMessageIds: stringListField(payload, "account_message_ids"),
 		LocalOnly:         boolField(payload, "local_only"),
+		ContactRef:        textField(payload, "contact_ref"),
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "mark WA messages read failed"})

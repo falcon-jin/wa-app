@@ -8,7 +8,7 @@ import { WhatsAppIcon } from './wa-brand-icon';
 import { waContactPath } from './wa-route-paths';
 import { Badge } from './ui';
 
-export function WaContactList({ accountID, contacts, selectedID, loading, error, deletingID, onDeleteContact }: { accountID: string; contacts: WaContact[]; selectedID: string; loading: boolean; error?: string; deletingID?: string; onDeleteContact: (contactID: string) => void }) {
+export function WaContactList({ accountID, contacts, selectedID, loading, error, deletingID, onOpenContact, onDeleteContact }: { accountID: string; contacts: WaContact[]; selectedID: string; loading: boolean; error?: string; deletingID?: string; onOpenContact: (contactID: string) => void; onDeleteContact: (contactID: string) => void }) {
   const [query, setQuery] = useState('');
   const visibleContacts = useMemo(() => filterContacts(contacts, query), [contacts, query]);
   const unreadCount = contacts.reduce((sum, contact) => sum + contact.unreadCount, 0);
@@ -25,17 +25,17 @@ export function WaContactList({ accountID, contacts, selectedID, loading, error,
         {error && <p className="rounded-xl border border-destructive/30 p-3 text-sm text-destructive">{error}</p>}
         {!loading && !error && contacts.length === 0 && <p className="p-4 text-sm text-muted-foreground">暂无联系人，收到消息后会显示在这里。</p>}
         {!loading && !error && contacts.length > 0 && visibleContacts.length === 0 && <p className="p-4 text-sm text-muted-foreground">没有匹配联系人。</p>}
-        {visibleContacts.map((contact) => <ContactRow key={contact.id} accountID={accountID} contact={contact} selected={contact.id === selectedID} deleting={deletingID === contact.id} onDeleteContact={onDeleteContact} />)}
+        {visibleContacts.map((contact) => <ContactRow key={contact.id} accountID={accountID} contact={contact} selected={contact.id === selectedID} deleting={deletingID === contact.id} onOpenContact={onOpenContact} onDeleteContact={onDeleteContact} />)}
       </div>
     </aside>
   );
 }
 
-function ContactRow({ accountID, contact, selected, deleting, onDeleteContact }: { accountID: string; contact: WaContact; selected: boolean; deleting: boolean; onDeleteContact: (contactID: string) => void }) {
+function ContactRow({ accountID, contact, selected, deleting, onOpenContact, onDeleteContact }: { accountID: string; contact: WaContact; selected: boolean; deleting: boolean; onOpenContact: (contactID: string) => void; onDeleteContact: (contactID: string) => void }) {
   const unread = contact.unreadCount > 0;
   return (
     <div className={`mb-1 grid grid-cols-[1fr_auto] items-center rounded-2xl transition hover:bg-muted/60 ${selected ? 'bg-primary/10' : unread ? 'bg-emerald-50/70' : ''}`}>
-      <NavLink className="grid min-w-0 grid-cols-[42px_1fr_auto] items-center gap-3 px-3 py-2 text-left" to={waContactPath(accountID, contact.id)}>
+      <NavLink className="grid min-w-0 grid-cols-[42px_1fr_auto] items-center gap-3 px-3 py-2 text-left" to={waContactPath(accountID, contact.id)} onClick={() => unread && onOpenContact(contact.id)}>
         <ContactAvatar contact={contact} />
         <span className="min-w-0 space-y-0.5">
           <span className="flex min-w-0 items-center gap-2">
@@ -43,7 +43,7 @@ function ContactRow({ accountID, contact, selected, deleting, onDeleteContact }:
             <ContactKindBadge kind={contact.kind} />
           </span>
           <span className={`block truncate text-xs ${unread ? 'font-medium text-foreground/85' : 'text-foreground/70'}`}>{contact.preview || contact.subtitle}</span>
-          {contact.preview && <span className="block truncate text-[11px] text-muted-foreground">{contact.subtitle}</span>}
+          {contact.preview && contact.subtitle && <span className="block truncate text-[11px] text-muted-foreground">{contact.subtitle}</span>}
         </span>
         <span className="grid justify-items-end gap-1">
           <time className="text-[11px] text-muted-foreground">{formatChatTime(contact.lastAt)}</time>

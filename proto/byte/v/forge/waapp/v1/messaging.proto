@@ -228,6 +228,7 @@ message MarkAccountMessagesReadRequest {
   string wa_account_id = 2;
   repeated string account_message_ids = 3;
   bool local_only = 4;
+  string contact_ref = 5;
 }
 
 message MarkAccountMessagesReadResponse {

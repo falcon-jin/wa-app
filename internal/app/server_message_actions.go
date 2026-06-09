@@ -30,7 +30,7 @@ func (s *Server) MarkAccountMessagesRead(ctx context.Context, req *waappv1.MarkA
 	if _, err := s.getWAAccount(ctx, accountID); err != nil {
 		return &waappv1.MarkAccountMessagesReadResponse{Error: ToProtoError(err)}, nil
 	}
-	records, err := s.loadMessageActionRecords(ctx, accountID, req.GetAccountMessageIds())
+	records, err := s.loadMessageReadRecords(ctx, accountID, req.GetAccountMessageIds(), req.GetContactRef())
 	if err != nil {
 		return &waappv1.MarkAccountMessagesReadResponse{Error: ToProtoError(err)}, nil
 	}
@@ -85,6 +85,25 @@ func (s *Server) DeleteAccountMessages(ctx context.Context, req *waappv1.DeleteA
 		}
 	}
 	return &waappv1.DeleteAccountMessagesResponse{UpdatedCount: int32(changed)}, nil
+}
+
+func (s *Server) loadMessageReadRecords(ctx context.Context, accountID string, requestedIDs []string, contactRef string) ([]messageActionRecord, error) {
+	if len(normalizeActionMessageIDs(requestedIDs)) > 0 {
+		return s.loadMessageActionRecords(ctx, accountID, requestedIDs)
+	}
+	contactRef = strings.TrimSpace(contactRef)
+	if contactRef == "" {
+		return nil, NewError(waappv1.WaErrorCode_WA_ERROR_CODE_VALIDATION_FAILED, "account_message_ids or contact_ref is required", false)
+	}
+	messages, err := s.store.ListUnreadInboundMessagesByContactRefs(ctx, accountID, s.resolveContactActionRefs(ctx, accountID, contactRef), maxMessageActionBatchSize)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]messageActionRecord, 0, len(messages))
+	for _, msg := range messages {
+		records = append(records, messageActionRecord{message: msg})
+	}
+	return records, nil
 }
 
 func (s *Server) loadMessageActionRecords(ctx context.Context, accountID string, requestedIDs []string) ([]messageActionRecord, error) {

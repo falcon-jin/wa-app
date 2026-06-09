@@ -42,6 +42,27 @@ func (s *SQLiteStore) ListAccountMessages(ctx context.Context, waAccountIDValue 
 	return items, nextCursor, nil
 }
 
+func (s *SQLiteStore) ListUnreadInboundMessagesByContactRefs(ctx context.Context, waAccountIDValue string, contactRefs []string, limit int) ([]*waappv1.InboundMessage, error) {
+	contactRefs = uniqueStrings(contactRefs...)
+	if len(contactRefs) == 0 {
+		return nil, nil
+	}
+	inClause, inArgs := sqliteInClause("COALESCE(NULLIF(json_extract(m.payload, '$.contact_ref'), ''), json_extract(m.payload, '$.sender_ref'))", contactRefs)
+	query := `SELECT m.payload
+FROM wa_sqlite_inbound_messages m
+JOIN wa_sqlite_message_sessions s ON s.id=m.message_session_id
+WHERE s.wa_account_id=?
+  AND json_extract(m.payload, '$.kind')=?
+  AND json_extract(m.payload, '$.read_at') IS NULL
+  AND ` + inClause + `
+  AND COALESCE(json_extract(m.payload, '$.delete_status'), 'MESSAGE_DELETE_STATUS_NOT_DELETED')<>'MESSAGE_DELETE_STATUS_DELETED_FOR_ME'
+ORDER BY m.received_at DESC, m.id DESC
+LIMIT ?`
+	args := append([]any{waAccountIDValue, waappv1.InboundMessageKind_INBOUND_MESSAGE_KIND_MESSAGE.String()}, inArgs...)
+	args = append(args, normalizeMessageActionLimit(limit))
+	return sqliteListPayloads(ctx, s.db, func() *waappv1.InboundMessage { return &waappv1.InboundMessage{} }, query, args...)
+}
+
 func (s *SQLiteStore) queryAccountMessages(ctx context.Context, waAccountIDValue string, contactRefs []string, cursor keysetCursor, limit int) (sqlRows, error) {
 	query := `SELECT m.payload, COALESCE((
   SELECT d.payload

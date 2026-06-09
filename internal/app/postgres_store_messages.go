@@ -95,3 +95,40 @@ func scanAccountMessage(rows pgx.Rows, includeSensitiveText bool) (*waappv1.Acco
 	parts.lastError = protoError(errCode, errMessage, errRetryable)
 	return newAccountMessage(parts, includeSensitiveText), nil
 }
+
+func (s *PostgresStore) ListUnreadInboundMessagesByContactRefs(ctx context.Context, waAccountIDValue string, contactRefs []string, limit int) ([]*waappv1.InboundMessage, error) {
+	contactRefs = uniqueStrings(contactRefs...)
+	if len(contactRefs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT m.message_id,m.message_session_id,m.kind,m.encryption_state,m.ack_status,m.contact_ref,m.sender_ref,m.payload_ref,m.provider_message_id,m.provider_timestamp,m.read_at,m.delete_status,m.deleted_at,m.last_error_code,m.last_error_message,m.last_error_retryable,m.received_at
+FROM wa_inbound_messages m
+JOIN wa_message_sessions ms ON ms.message_session_id=m.message_session_id
+WHERE ms.wa_account_id=$1
+  AND m.kind=$2
+  AND m.read_at IS NULL
+  AND COALESCE(NULLIF(m.contact_ref,''), m.sender_ref)=ANY($3)
+  AND COALESCE(m.delete_status,'MESSAGE_DELETE_STATUS_NOT_DELETED')<>'MESSAGE_DELETE_STATUS_DELETED_FOR_ME'
+ORDER BY m.received_at DESC, m.message_id DESC
+LIMIT $4`, waAccountIDValue, waappv1.InboundMessageKind_INBOUND_MESSAGE_KIND_MESSAGE.String(), contactRefs, normalizeMessageActionLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []*waappv1.InboundMessage{}
+	for rows.Next() {
+		msg, err := scanPostgresInboundMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+	return messages, rows.Err()
+}
+
+func normalizeMessageActionLimit(limit int) int {
+	if limit <= 0 || limit > maxMessageActionBatchSize {
+		return maxMessageActionBatchSize
+	}
+	return limit
+}

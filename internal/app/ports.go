@@ -43,6 +43,7 @@ type Store interface {
 	SaveInboundMessages(context.Context, []*waappv1.InboundMessage) error
 	GetInboundMessage(context.Context, string) (*waappv1.InboundMessage, error)
 	ListPendingEncryptedInboundMessages(context.Context, string, string, int) ([]*waappv1.InboundMessage, error)
+	ListUnreadInboundMessagesByContactRefs(context.Context, string, []string, int) ([]*waappv1.InboundMessage, error)
 	ListAccountMessages(context.Context, string, []string, string, int, bool) ([]*waappv1.AccountMessage, string, error)
 	SaveDecryptedMessage(context.Context, *waappv1.DecryptedMessage) error
 	GetDecryptedMessage(context.Context, string) (*waappv1.DecryptedMessage, error)
