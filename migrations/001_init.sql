@@ -251,6 +251,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS wa_login_states_registration_id_key ON wa_logi
 CREATE UNIQUE INDEX IF NOT EXISTS wa_login_states_registered_identity_id_key ON wa_login_states (registered_identity_id);
 CREATE INDEX IF NOT EXISTS wa_inbound_messages_session_received_idx ON wa_inbound_messages (message_session_id, received_at DESC, message_id DESC);
 CREATE INDEX IF NOT EXISTS wa_inbound_messages_contact_received_idx ON wa_inbound_messages (message_session_id, contact_ref, received_at DESC, message_id DESC);
+CREATE INDEX IF NOT EXISTS wa_inbound_messages_thread_received_idx ON wa_inbound_messages ((COALESCE(NULLIF(contact_ref,''), sender_ref)), received_at DESC, message_id DESC);
 CREATE INDEX IF NOT EXISTS wa_inbound_messages_provider_message_idx ON wa_inbound_messages (message_session_id, provider_message_id);
 CREATE INDEX IF NOT EXISTS wa_inbound_messages_delete_status_idx ON wa_inbound_messages (message_session_id, delete_status, received_at DESC);
 CREATE INDEX IF NOT EXISTS wa_decrypted_messages_message_decrypted_idx ON wa_decrypted_messages (message_id, decrypted_at DESC, decrypted_message_id DESC);

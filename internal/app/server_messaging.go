@@ -117,7 +117,8 @@ func (s *Server) ListAccountMessages(ctx context.Context, req *waappv1.ListAccou
 	if strings.TrimSpace(req.GetContactRef()) == "" {
 		return &waappv1.ListAccountMessagesResponse{}, nil
 	}
-	items, nextCursor, err := s.store.ListAccountMessages(ctx, accountID, req.GetContactRef(), req.GetCursor(), int(req.GetLimit()), req.GetIncludeSensitiveText())
+	contactRefs := s.resolveContactActionRefs(ctx, accountID, req.GetContactRef())
+	items, nextCursor, err := s.store.ListAccountMessages(ctx, accountID, contactRefs, req.GetCursor(), int(req.GetLimit()), req.GetIncludeSensitiveText())
 	if err != nil {
 		return &waappv1.ListAccountMessagesResponse{Error: ToProtoError(err)}, nil
 	}

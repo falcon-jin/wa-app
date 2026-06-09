@@ -5,7 +5,7 @@ import type { LongConnectionState } from '../proto/byte/v/forge/waapp/v1/messagi
 import type { WAAccount } from '../proto/byte/v/forge/waapp/v1/profile';
 import { deleteWaContact, deleteWaMessagesForMe, getWaContacts, getWaMessages, markWaMessagesRead, waAccountID, waKeys } from './wa-api';
 import { useWaContactAutoResolve } from './wa-contact-resolve';
-import { buildWaChatEvents, buildWaContacts, filterWaEvents, isUnreadChatEvent } from './wa-chat-model';
+import { buildWaChatEvents, buildWaContacts, isUnreadChatEvent } from './wa-chat-model';
 import { WaChatThread } from './wa-chat-thread';
 import { WaContactList } from './wa-contact-list';
 import { waContactPath } from './wa-route-paths';
@@ -19,9 +19,9 @@ export function WaInbox({ account, connection, contactID }: { account: WAAccount
   const activeContactID = baseContacts.some((contact) => contact.id === contactID) ? contactID : baseContacts[0]?.id || '';
   const messagesQuery = useQuery({ queryKey: waKeys.messages(accountID, activeContactID), queryFn: () => getWaMessages(accountID, activeContactID), enabled: Boolean(accountID && activeContactID), refetchInterval: 8000 });
   const events = useMemo(() => buildWaChatEvents(messagesQuery.data?.messages || []), [messagesQuery.data?.messages]);
-  const contacts = useMemo(() => buildWaContacts(events, contactsQuery.data?.contacts || []), [events, contactsQuery.data?.contacts]);
+  const contacts = baseContacts;
   const activeContact = contacts.find((contact) => contact.id === activeContactID);
-  const threadEvents = useMemo(() => filterWaEvents(events, activeContactID), [events, activeContactID]);
+  const threadEvents = events;
   const refreshMessageViews = async () => {
     await Promise.all([queryClient.invalidateQueries({ queryKey: waKeys.messages(accountID, activeContactID) }), queryClient.invalidateQueries({ queryKey: waKeys.contacts(accountID) }), queryClient.invalidateQueries({ queryKey: waKeys.otpMessages(accountID) })]);
   };
@@ -59,7 +59,7 @@ export function WaInbox({ account, connection, contactID }: { account: WAAccount
   );
 }
 
-function markThreadRead(events: ReturnType<typeof filterWaEvents>, mutate: (messageIDs: string[]) => void) {
+function markThreadRead(events: ReturnType<typeof buildWaChatEvents>, mutate: (messageIDs: string[]) => void) {
   const ids = events.filter(isUnreadChatEvent).map((event) => event.id);
   if (ids.length > 0) mutate(ids);
 }

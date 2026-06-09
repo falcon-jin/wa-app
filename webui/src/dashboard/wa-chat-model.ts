@@ -61,10 +61,6 @@ export function buildWaContacts(events: WaChatEvent[], records: WAContactRecord[
   return [...contacts.values()].sort(compareContacts);
 }
 
-export function filterWaEvents(events: WaChatEvent[], contactID: string) {
-  return contactID ? events.filter((event) => event.contactID === contactID) : [];
-}
-
 export function toAssistantMessage(event: WaChatEvent): ThreadMessageLike {
   return {
     id: event.id,

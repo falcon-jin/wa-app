@@ -94,20 +94,20 @@ func (s *Server) DeleteWAContact(ctx context.Context, req *waappv1.DeleteWAConta
 	if contactRef == "" {
 		return &waappv1.DeleteWAContactResponse{Error: ToProtoError(NewError(waappv1.WaErrorCode_WA_ERROR_CODE_VALIDATION_FAILED, "contact_ref is required", false))}, nil
 	}
-	contactRef = s.resolveContactDeleteRef(ctx, accountID, contactRef)
-	result, err := s.store.DeleteWAContact(ctx, accountID, contactRef, s.clock.Now())
+	contactRefs := s.resolveContactActionRefs(ctx, accountID, contactRef)
+	result, err := s.store.DeleteWAContact(ctx, accountID, contactRefs, s.clock.Now())
 	if err != nil {
 		return &waappv1.DeleteWAContactResponse{Error: ToProtoError(err)}, nil
 	}
 	return &waappv1.DeleteWAContactResponse{Deleted: result.Deleted, DeletedMessageCount: int32(result.DeletedMessageCount)}, nil
 }
 
-func (s *Server) resolveContactDeleteRef(ctx context.Context, accountID string, contactRef string) string {
-	contact, err := s.store.GetWAContact(ctx, contactRef)
+func (s *Server) resolveContactActionRefs(ctx context.Context, accountID string, contactRef string) []string {
+	contact, err := s.store.GetWAContactByRef(ctx, accountID, contactRef)
 	if err != nil || contact.GetWaAccountId() != accountID {
-		return contactRef
+		return contactActionRefs(contactRef, nil)
 	}
-	return firstNonEmpty(contact.GetJid(), contact.GetNumber(), contactRef)
+	return contactActionRefs(contactRef, contact)
 }
 
 func (s *Server) resolveContactJIDs(ctx context.Context, accountID string, requested []string, limit int) ([]string, error) {

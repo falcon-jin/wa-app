@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	waappv1 "github.com/byte-v-forge/wa-app/gen/go/byte/v/forge/waapp/v1"
@@ -57,6 +56,16 @@ func (s *PostgresStore) GetWAContact(ctx context.Context, contactID string) (*wa
 	return r.toProto(), nil
 }
 
+func (s *PostgresStore) GetWAContactByRef(ctx context.Context, waAccountIDValue string, contactRef string) (*waappv1.WAContact, error) {
+	refs := contactRefVariants(contactRef)
+	var r contactRow
+	row := s.pool.QueryRow(ctx, contactSelectSQL+` WHERE c.wa_account_id=$1 AND (c.contact_id=ANY($2) OR c.jid=ANY($2) OR c.number=ANY($2)) ORDER BY c.updated_at DESC LIMIT 1`, waAccountIDValue, refs)
+	if err := scanContactRow(row, &r); err != nil {
+		return nil, notFound(err, waappv1.WaErrorCode_WA_ERROR_CODE_MESSAGE_NOT_FOUND, "WA contact not found")
+	}
+	return r.toProto(), nil
+}
+
 func (s *PostgresStore) ListWAContacts(ctx context.Context, waAccountIDValue string, cursorValue string, limit int) ([]*waappv1.WAContact, string, error) {
 	cursor, err := decodeKeysetCursor(cursorValue)
 	if err != nil {
@@ -85,8 +94,11 @@ func (s *PostgresStore) ListWAContacts(ctx context.Context, waAccountIDValue str
 	return items, nextCursor, nil
 }
 
-func (s *PostgresStore) DeleteWAContact(ctx context.Context, waAccountIDValue string, contactRef string, deletedAt time.Time) (DeleteWAContactResult, error) {
-	refs := contactDeleteRefs(contactRef)
+func (s *PostgresStore) DeleteWAContact(ctx context.Context, waAccountIDValue string, refs []string, deletedAt time.Time) (DeleteWAContactResult, error) {
+	refs = uniqueStrings(refs...)
+	if len(refs) == 0 {
+		return DeleteWAContactResult{}, nil
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return DeleteWAContactResult{}, err
@@ -152,7 +164,7 @@ LEFT JOIN LATERAL (
   JOIN wa_message_sessions ms ON ms.message_session_id=m.message_session_id
   WHERE ms.wa_account_id=c.wa_account_id
     AND m.kind='INBOUND_MESSAGE_KIND_MESSAGE'
-    AND COALESCE(NULLIF(m.contact_ref,''), m.sender_ref) IN (c.jid, c.number)
+    AND COALESCE(NULLIF(m.contact_ref,''), m.sender_ref) IN (c.jid, c.number, CASE WHEN c.number<>'' THEN c.number || '@s.whatsapp.net' ELSE '' END)
     AND COALESCE(m.delete_status,'MESSAGE_DELETE_STATUS_NOT_DELETED')<>'MESSAGE_DELETE_STATUS_DELETED_FOR_ME'
 ) stats ON true`
 
@@ -162,30 +174,4 @@ type contactScanner interface {
 
 func scanContactRow(scanner contactScanner, r *contactRow) error {
 	return scanner.Scan(&r.id, &r.waAccountIDValue, &r.jid, &r.number, &r.displayName, &r.waName, &r.verifiedName, &r.profilePictureID, &r.kind, &r.isWhatsAppUser, &r.isReachable, &r.createdAt, &r.updatedAt, &r.messageCount, &r.unreadCount, &r.lastMessageAt)
-}
-
-func contactDeleteRefs(contactRef string) []string {
-	contactRef = strings.TrimSpace(contactRef)
-	numberRef := strings.TrimPrefix(contactRef, "+")
-	if strings.Contains(numberRef, "@") {
-		numberRef = contactRef
-	}
-	return uniqueStrings(contactRef, numberRef, normalizeWAJID(numberRef))
-}
-
-func uniqueStrings(values ...string) []string {
-	out := []string{}
-	seen := map[string]struct{}{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }

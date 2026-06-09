@@ -43,7 +43,7 @@ type Store interface {
 	SaveInboundMessages(context.Context, []*waappv1.InboundMessage) error
 	GetInboundMessage(context.Context, string) (*waappv1.InboundMessage, error)
 	ListPendingEncryptedInboundMessages(context.Context, string, string, int) ([]*waappv1.InboundMessage, error)
-	ListAccountMessages(context.Context, string, string, string, int, bool) ([]*waappv1.AccountMessage, string, error)
+	ListAccountMessages(context.Context, string, []string, string, int, bool) ([]*waappv1.AccountMessage, string, error)
 	SaveDecryptedMessage(context.Context, *waappv1.DecryptedMessage) error
 	GetDecryptedMessage(context.Context, string) (*waappv1.DecryptedMessage, error)
 	SaveCandidates(context.Context, []*waappv1.ExtractedCandidate) error
@@ -51,8 +51,9 @@ type Store interface {
 	ListAccountOTPMessages(context.Context, string, string, int, bool) ([]*waappv1.OtpMessage, string, error)
 	SaveWAContacts(context.Context, []*waappv1.WAContact) error
 	GetWAContact(context.Context, string) (*waappv1.WAContact, error)
+	GetWAContactByRef(context.Context, string, string) (*waappv1.WAContact, error)
 	ListWAContacts(context.Context, string, string, int) ([]*waappv1.WAContact, string, error)
-	DeleteWAContact(context.Context, string, string, time.Time) (DeleteWAContactResult, error)
+	DeleteWAContact(context.Context, string, []string, time.Time) (DeleteWAContactResult, error)
 }
 
 type DeleteWAContactResult struct {
