@@ -144,12 +144,34 @@ function useFilteredAccounts(accounts: WAAccount[], query: string) {
   return useMemo(() => {
     const normalized = normalizeQuery(query);
     if (!normalized) return accounts;
-    return accounts.filter((account) => normalizeQuery(waAccountPhone(account)).includes(normalized));
+    return accounts.filter((account) => normalizeQuery(waAccountPhoneSearchText(account)).includes(normalized));
   }, [accounts, query]);
 }
 
 function waAccountPhone(account: WAAccount) {
-  return account.phone?.e164_number || '';
+  const phone = account.phone;
+  const callingCode = phoneCallingCode(phone?.country_calling_code || '');
+  const nationalNumber = (phone?.national_number || '').trim();
+  if (callingCode && nationalNumber) return `${callingCode} ${nationalNumber}`;
+  return formatE164Number(phone?.e164_number || '', callingCode);
+}
+
+function waAccountPhoneSearchText(account: WAAccount) {
+  const phone = account.phone;
+  return `${waAccountPhone(account)} ${phone?.e164_number || ''} ${phone?.national_number || ''}`;
+}
+
+function formatE164Number(value: string, callingCode: string) {
+  value = value.trim();
+  if (!value || !callingCode || !value.startsWith(callingCode)) return value;
+  const nationalNumber = value.slice(callingCode.length).trim();
+  return nationalNumber ? `${callingCode} ${nationalNumber}` : value;
+}
+
+function phoneCallingCode(value: string) {
+  value = value.trim();
+  if (!value) return '';
+  return value.startsWith('+') ? value : `+${value}`;
 }
 
 function waAccountPhoneLabel(account: WAAccount) {
