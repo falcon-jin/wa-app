@@ -4,7 +4,7 @@ import { Info, Loader2, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react
 import { Link, NavLink } from 'react-router';
 import type { LongConnectionState } from '../proto/byte/v/forge/waapp/v1/messaging';
 import type { WAAccount } from '../proto/byte/v/forge/waapp/v1/profile';
-import { waAccountID, waAccountTitle } from './wa-api';
+import { waAccountID } from './wa-api';
 import { WaAccountAvatar } from './wa-account-avatar';
 import { WhatsAppIcon } from './wa-brand-icon';
 import { WaConnectionDot } from './wa-connection-dot';
@@ -93,14 +93,14 @@ function RailBrand({ count }: { count: number }) {
 
 function RailSearch({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
-    <SidebarInput value={value} onChange={(event) => onChange(event.target.value)} placeholder="搜索手机号或账号 ID" aria-label="搜索账号" />
+    <SidebarInput value={value} onChange={(event) => onChange(event.target.value)} placeholder="搜索手机号" aria-label="搜索账号" />
   );
 }
 
 function AccountItem({ account, selected, avatarVersion, connection, loading }: AccountItemProps) {
   const { state } = useSidebar();
   const id = waAccountID(account);
-  const title = waAccountTitle(account);
+  const title = waAccountPhoneLabel(account);
   const avatarSize = state === 'collapsed' ? 'lg' : 'xs';
   return (
     <SidebarMenuItem>
@@ -112,7 +112,6 @@ function AccountItem({ account, selected, avatarVersion, connection, loading }: 
           </span>
           <span className={`min-w-0 flex-1 ${collapsedTextClass}`}>
             <span className="block whitespace-nowrap text-sm font-medium tabular-nums">{title}</span>
-            <span className="block truncate text-xs text-muted-foreground">{id}</span>
           </span>
         </NavLink>
       </SidebarMenuButton>
@@ -149,8 +148,16 @@ function useFilteredAccounts(accounts: WAAccount[], query: string) {
   return useMemo(() => {
     const normalized = normalizeQuery(query);
     if (!normalized) return accounts;
-    return accounts.filter((account) => normalizeQuery(`${waAccountTitle(account)} ${waAccountID(account)}`).includes(normalized));
+    return accounts.filter((account) => normalizeQuery(waAccountPhone(account)).includes(normalized));
   }, [accounts, query]);
+}
+
+function waAccountPhone(account: WAAccount) {
+  return account.phone?.e164_number || '';
+}
+
+function waAccountPhoneLabel(account: WAAccount) {
+  return waAccountPhone(account) || '未录入手机号';
 }
 
 function normalizeQuery(value: string) {
