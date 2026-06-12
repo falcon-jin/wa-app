@@ -36,7 +36,7 @@ func (c *nativeHTTPClient) CloseIdleConnections() {
 }
 
 func newNativeHTTPClient(proxy string) (*nativeHTTPClient, error) {
-	transport := &http.Transport{DisableKeepAlives: true, TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	transport := &http.Transport{ForceAttemptHTTP2: false, TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	if proxy != "" {
 		parsed, err := parseOutboundProxyURL(proxy)
 		if err != nil {
@@ -90,13 +90,14 @@ func (c *nativeHTTPClient) postWASafe(ctx context.Context, endpoint string, plai
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", firstNonEmpty(userAgent, nativeUserAgent(defaultWAAppVersion)))
-	req.Header.Set("WaMsysRequest", "1")
-	req.Header.Set("X-Forwarded-Host", defaultNativeHTTPHost)
-	req.Header.Set("request_token", strings.ToUpper(newUUIDString()))
+	setNativeHTTPHeader(req, "Content-Type", "application/x-www-form-urlencoded")
+	setNativeHTTPHeader(req, "Connection", "Keep-Alive")
+	setNativeHTTPHeader(req, "User-Agent", firstNonEmpty(userAgent, nativeUserAgent(defaultWAAppVersion)))
+	setNativeHTTPHeader(req, "WaMsysRequest", "1")
+	setNativeHTTPHeader(req, "X-Forwarded-Host", defaultNativeHTTPHost)
+	setNativeHTTPHeader(req, "request_token", strings.ToUpper(newUUIDString()))
 	if envelope.Authorization != "" {
-		req.Header.Set("Authorization", envelope.Authorization)
+		setNativeHTTPHeader(req, "Authorization", envelope.Authorization)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -115,6 +116,10 @@ func (c *nativeHTTPClient) postWASafe(ctx context.Context, endpoint string, plai
 		return result, envelope.Enc, fmt.Errorf("wasafe endpoint returned status %d", resp.StatusCode)
 	}
 	return result, envelope.Enc, nil
+}
+
+func setNativeHTTPHeader(req *http.Request, name string, value string) {
+	req.Header[name] = []string{value}
 }
 
 func encryptWASafe(plaintext []byte, serverPublicKeyHex string) (string, error) {
