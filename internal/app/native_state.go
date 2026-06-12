@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	mrand "math/rand"
 	"regexp"
 	"sort"
 	"strings"
@@ -300,22 +301,79 @@ func newNativeState(phone *waappv1.PhoneTarget) (nativeState, error) {
 }
 
 type nativeDeviceModel struct {
-	Vendor  string
-	Model   string
-	Android string
+	Vendor    string
+	Model     string
+	Android   string
+	MinRAMGiB float64
+	MaxRAMGiB float64
 }
 
 var nativeDeviceModels = []nativeDeviceModel{
-	{Vendor: "HUAWEI", Model: "TRT-AL00A", Android: "7.0"},
+	{Vendor: "HUAWEI", Model: "TRT-AL00A", Android: "7.0", MinRAMGiB: 2.8, MaxRAMGiB: 3.9},
+	{Vendor: "Xiaomi", Model: "M2007J3SC", Android: "11", MinRAMGiB: 5.5, MaxRAMGiB: 7.8},
+	{Vendor: "samsung", Model: "SM-G991B", Android: "13", MinRAMGiB: 6.8, MaxRAMGiB: 7.6},
+	{Vendor: "OPPO", Model: "CPH2305", Android: "12", MinRAMGiB: 3.6, MaxRAMGiB: 7.4},
+	{Vendor: "vivo", Model: "V2145A", Android: "12", MinRAMGiB: 5.5, MaxRAMGiB: 7.7},
+}
+
+var nativeOperators = map[string][][2]string{
+	"US":   {{"310", "260"}, {"310", "410"}, {"311", "480"}},
+	"CN":   {{"460", "00"}, {"460", "01"}, {"460", "11"}},
+	"PL":   {{"260", "01"}, {"260", "02"}, {"260", "06"}},
+	"NONE": {{"", ""}},
+}
+
+var nativeRadioTypes = []string{"1", "2", "3", "9", "13", "20"}
+
+func nativeRandomRadioType(rng *mrand.Rand) string {
+	if rng == nil || len(nativeRadioTypes) == 0 {
+		return "1"
+	}
+	return nativeRadioTypes[rng.Intn(len(nativeRadioTypes))]
 }
 
 func buildNativePhoneProfile(phone *waappv1.PhoneTarget) nativePhoneProfile {
-	model := defaultNativeDeviceModel()
+	seed := int64(binary.BigEndian.Uint64(randomBytes(8)))
+	rng := mrand.New(mrand.NewSource(seed))
+	model := nativeDeviceModels[rng.Intn(len(nativeDeviceModels))]
+	country := strings.ToUpper(strings.TrimSpace(phone.GetCountryIso2()))
+	ops := nativeOperators[country]
+	if len(ops) == 0 {
+		ops = nativeOperators["NONE"]
+	}
+	op := ops[rng.Intn(len(ops))]
+	simOp := ops[rng.Intn(len(ops))]
 	expIDUUID, expID := uuidPair()
 	accessUUID, accessSessionID := uuidPair()
 	id := randomBytes(20)
 	backup := randomBytes(20)
 	phoneHash := sha256.Sum256([]byte(fullPhoneKey(phoneCC(phone), phoneNational(phone))))
+	simnum := "0"
+	if op[0] != "" && rng.Intn(2) == 1 {
+		simnum = "1"
+	}
+	ram := model.MinRAMGiB + rng.Float64()*(model.MaxRAMGiB-model.MinRAMGiB)
+	additionalFields := map[string]string{
+		"network_radio_type":    nativeRandomRadioType(rng),
+		"pid":                   fmt.Sprintf("%d", 10000+rng.Intn(50000)),
+		"simnum":                simnum,
+		"hasinrc":               "1",
+		"rc":                    "0",
+		"device_ram":            fmt.Sprintf("%.2f", ram),
+		"db":                    "1",
+		"recaptcha":             `{"stage":"ABPROP_DISABLED"}`,
+		"feo2_query_status":     "error_security_exception",
+		"network_operator_name": "",
+		"sim_operator_name":     "",
+	}
+	if op[0] != "" {
+		additionalFields["mcc"] = op[0]
+		additionalFields["mnc"] = op[1]
+	}
+	if simOp[0] != "" {
+		additionalFields["sim_mcc"] = simOp[0]
+		additionalFields["sim_mnc"] = simOp[1]
+	}
 	return nativePhoneProfile{
 		Schema:              "ctf-whatsapp-phone-profile/v1",
 		CreatedAtUnix:       time.Now().UTC().Unix(),
@@ -332,7 +390,7 @@ func buildNativePhoneProfile(phone *waappv1.PhoneTarget) nativePhoneProfile {
 		IDHex:               hex.EncodeToString(id),
 		BackupToken:         pctBytes(backup),
 		BackupTokenHex:      hex.EncodeToString(backup),
-		AdditionalMapFields: nativeDefaultDeviceMapFields(),
+		AdditionalMapFields: additionalFields,
 	}
 }
 

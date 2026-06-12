@@ -204,7 +204,7 @@ func nativeDeviceMapFields(state nativeState) map[string]string {
 		fields[key] = value
 	}
 	for key, value := range nativeDefaultDeviceMapFields() {
-		fields[key] = value
+		fields[key] = firstNonEmpty(fields[key], value)
 	}
 	return fields
 }
@@ -222,10 +222,10 @@ func nativeDefaultDeviceMapFields() map[string]string {
 		"feo2_query_status":     "error_security_exception",
 		"network_operator_name": "",
 		"sim_operator_name":     "",
-		"mcc":                   "000",
-		"mnc":                   "000",
-		"sim_mcc":               "000",
-		"sim_mnc":               "000",
+		"mcc":                   "",
+		"mnc":                   "",
+		"sim_mcc":               "",
+		"sim_mnc":               "",
 	}
 }
 
