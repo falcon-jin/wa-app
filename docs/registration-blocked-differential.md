@@ -54,4 +54,4 @@ APK 的冷却是按通道生效：真实可见 fallback 先从 `pref_reg_methods
 - 运行态改为纯本地 WAMSYS material provider：`gpia/_gi/_gg/_gp/_ga/aid` 不再依赖 Android oracle；字段长度、Base64/JSON 形态与 APK capture 对齐，并保持运行日志不输出 opaque blob。
 - 最新 APK 对 `/v2/exist` / same-device check 的 `no_routes` 仍会继续解析 wait 与 fallback 元数据；wa-app 只把 blocked、号码异常、协议错误和冷却作为预检终局。SMS 直发是否真正可用由后续 `/v2/code` 决定，避免在预检阶段误报“暂无可用验证通道”。
 - 显式选择 SMS fallback 时，APK 会把 `pref_prefer_sms_over_flash=true` 写入请求 map；wa-app 对直发 SMS 同步发送 `prefer_sms_over_flash=true`，避免服务端继续按 flash 优先分流。
-- 点击前端 SMS 通道后进入的是 `/v2/code`；最新 APK 的 code request 会发送 `clicked_education_link/manage_call_permission/call_log_permission` 与 `sim_type/airplane_mode_type/cellular_strength/roaming_type`，而 `mistyped`、`hasav` 只在 App runtime 有值时发送。wa-app 同步补齐这些 code 字段，并停止默认固定发送旧 APK 的 `mistyped=7`、`hasav=2`。
+- 点击前端 SMS 通道后进入的是 `/v2/code`；最新 APK 的 code request 会发送 `clicked_education_link/manage_call_permission/call_log_permission`、`sim_type/airplane_mode_type/cellular_strength/roaming_type`，并在常规 request-code 路径携带 `mistyped=7`、`hasav=2`；wa-app 同步恢复这两个默认字段。

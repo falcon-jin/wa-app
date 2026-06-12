@@ -242,6 +242,8 @@ func nativeDefaultDeviceMapFields() map[string]string {
 		"airplane_mode_type":    "0",
 		"cellular_strength":     "5",
 		"roaming_type":          "0",
+		"mistyped":              "7",
+		"hasav":                 "2",
 		"pid":                   "29418",
 		"simnum":                "0",
 		"hasinrc":               "1",
