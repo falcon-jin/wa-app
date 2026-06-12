@@ -7,7 +7,6 @@ toolchain go1.26.3
 require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/nyaruka/phonenumbers v1.7.5
-	github.com/refraction-networking/utls v1.8.2
 	go.mozilla.org/pkcs7 v0.9.0
 	go.step.sm/crypto v0.81.1
 	golang.org/x/crypto v0.52.0
@@ -15,11 +14,6 @@ require (
 	golang.org/x/sync v0.20.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
-)
-
-require (
-	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/klauspost/compress v1.17.4 // indirect
 )
 
 require (

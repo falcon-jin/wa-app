@@ -8,7 +8,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
-	stdtls "crypto/tls"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	utls "github.com/refraction-networking/utls"
 	xproxy "golang.org/x/net/proxy"
 )
 
@@ -37,38 +36,28 @@ func (c *nativeHTTPClient) CloseIdleConnections() {
 }
 
 func newNativeHTTPClient(proxy string) (*nativeHTTPClient, error) {
-	dialer := &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 20 * time.Second}
-	transport := &http.Transport{
-		ForceAttemptHTTP2: false,
-		TLSClientConfig:   &stdtls.Config{InsecureSkipVerify: true},
-		DialContext:       dialer.DialContext,
-		DialTLSContext:    nativeAndroidDialTLSContext(dialer.DialContext),
-	}
+	transport := &http.Transport{DisableKeepAlives: true, TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	if proxy != "" {
 		parsed, err := parseOutboundProxyURL(proxy)
 		if err != nil {
 			return nil, err
 		}
-		if err := configureNativeHTTPProxy(transport, parsed, dialer); err != nil {
+		if err := configureNativeHTTPProxy(transport, parsed); err != nil {
 			return nil, err
 		}
 	}
 	return &nativeHTTPClient{client: &http.Client{Timeout: 20 * time.Second, Transport: transport}}, nil
 }
 
-func configureNativeHTTPProxy(transport *http.Transport, parsed *url.URL, dialer *net.Dialer) error {
+func configureNativeHTTPProxy(transport *http.Transport, parsed *url.URL) error {
 	if transport == nil || parsed == nil {
 		return nil
-	}
-	if dialer == nil {
-		dialer = &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 20 * time.Second}
 	}
 	switch {
 	case parsed.Scheme == "http" || parsed.Scheme == "https":
 		transport.Proxy = http.ProxyURL(parsed)
-		transport.DialContext = dialer.DialContext
-		transport.DialTLSContext = nil
 	case strings.HasPrefix(parsed.Scheme, "socks5"):
+		dialer := &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 20 * time.Second}
 		var auth *xproxy.Auth
 		if parsed.User != nil {
 			password, _ := parsed.User.Password()
@@ -83,58 +72,34 @@ func configureNativeHTTPProxy(transport *http.Transport, parsed *url.URL, dialer
 			return fmt.Errorf("SOCKS5 proxy dialer does not support context")
 		}
 		transport.DialContext = contextDialer.DialContext
-		transport.DialTLSContext = nativeAndroidDialTLSContext(contextDialer.DialContext)
 	default:
 		return fmt.Errorf("unsupported HTTP proxy scheme")
 	}
 	return nil
 }
 
-func nativeAndroidDialTLSContext(dialContext func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network string, addr string) (net.Conn, error) {
-		if dialContext == nil {
-			return nil, fmt.Errorf("native TLS dialer is not configured")
-		}
-		rawConn, err := dialContext(ctx, network, addr)
-		if err != nil {
-			return nil, err
-		}
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			_ = rawConn.Close()
-			return nil, err
-		}
-		tlsConn := utls.UClient(rawConn, &utls.Config{ServerName: host, InsecureSkipVerify: true}, utls.HelloAndroid_11_OkHttp)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			_ = rawConn.Close()
-			return nil, err
-		}
-		return tlsConn, nil
-	}
-}
-
 func (c *nativeHTTPClient) postWASafe(ctx context.Context, endpoint string, plain string, userAgent string, attestation nativeSoftwareAttestation) (map[string]any, string, error) {
+	_ = attestation
 	if endpoint == "" {
 		return nil, "", fmt.Errorf("endpoint is not configured")
 	}
-	envelope, err := buildWASafeEnvelope([]byte(plain), defaultWASafeServerPublicKeyHex, attestation)
+	enc, err := encryptWASafe([]byte(plain), defaultWASafeServerPublicKeyHex)
 	if err != nil {
 		return nil, "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(envelope.Body))
+	body := "ENC=" + enc
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(body))
 	if err != nil {
 		return nil, "", err
 	}
-	setNativeHTTPHeader(req, "Content-Type", "application/x-www-form-urlencoded")
-	setNativeHTTPHeader(req, "User-Agent", firstNonEmpty(userAgent, nativeUserAgent(defaultWAAppVersion)))
-	setNativeHTTPHeader(req, "WaMsysRequest", "1")
-	setNativeHTTPHeader(req, "X-Forwarded-Host", defaultNativeHTTPHost)
-	if envelope.Authorization != "" {
-		setNativeHTTPHeader(req, "Authorization", envelope.Authorization)
-	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", firstNonEmpty(userAgent, nativeUserAgent(defaultWAAppVersion)))
+	req.Header.Set("WaMsysRequest", "1")
+	req.Header.Set("X-Forwarded-Host", defaultNativeHTTPHost)
+	req.Header.Set("request_token", strings.ToUpper(newUUIDString()))
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, envelope.Enc, err
+		return nil, enc, err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -146,13 +111,9 @@ func (c *nativeHTTPClient) postWASafe(ctx context.Context, endpoint string, plai
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return result, envelope.Enc, fmt.Errorf("wasafe endpoint returned status %d", resp.StatusCode)
+		return result, enc, fmt.Errorf("wasafe endpoint returned status %d", resp.StatusCode)
 	}
-	return result, envelope.Enc, nil
-}
-
-func setNativeHTTPHeader(req *http.Request, name string, value string) {
-	req.Header[name] = []string{value}
+	return result, enc, nil
 }
 
 func encryptWASafe(plaintext []byte, serverPublicKeyHex string) (string, error) {
