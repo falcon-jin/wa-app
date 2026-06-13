@@ -690,9 +690,10 @@ func (g *actionGateway) registrationGatewayProxy(ctx context.Context, payload ma
 		Purpose:       purpose,
 		CorrelationID: registrationProxyCorrelationID(payload),
 		SessionID:     g.registrationProxySessionID(payload, purpose),
-		CountryCode:   "US",
+		CountryCode:   proxyCountryCodeFromPayload(payload),
 		TTL:           registrationProxyRouteTTL,
 		Mode:          DynamicProxySessionModeSticky,
+		ForceNew:      true,
 	})
 }
 

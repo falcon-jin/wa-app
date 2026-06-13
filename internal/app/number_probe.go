@@ -102,7 +102,7 @@ func (s *Server) probeNumberSMSAttempt(ctx context.Context, payload map[string]a
 	return result, route, false, ""
 }
 
-func (s *Server) numberProbeGatewayProxy(ctx context.Context, correlationID string) (DynamicProxyRoute, error) {
+func (s *Server) numberProbeGatewayProxy(ctx context.Context, payload map[string]any, correlationID string) (DynamicProxyRoute, error) {
 	if s == nil || s.proxyRuntime == nil {
 		return DynamicProxyRoute{}, fmt.Errorf("WA proxy runtime is not configured")
 	}
@@ -113,6 +113,7 @@ func (s *Server) numberProbeGatewayProxy(ctx context.Context, correlationID stri
 	return s.proxyRuntime.GatewayProxyRoute(ctx, username, DynamicProxyRouteRequest{
 		Purpose:       "WA_NUMBER_PROBE",
 		CorrelationID: correlationID,
+		CountryCode:   proxyCountryCodeFromPayload(payload),
 		TTL:           numberProbeProxyRouteTTL,
 		Mode:          DynamicProxySessionModeRotating,
 	})
@@ -124,7 +125,7 @@ func (s *Server) numberProbeProxy(ctx context.Context, payload map[string]any, c
 		return route, proxyURL, proxy, func() {}, nil
 	}
 	if s != nil && strings.TrimSpace(s.numberProbeProxyUsername) != "" {
-		route, err := s.numberProbeGatewayProxy(ctx, correlationID)
+		route, err := s.numberProbeGatewayProxy(ctx, payload, correlationID)
 		if err != nil {
 			return DynamicProxyRoute{}, "", nil, func() {}, err
 		}
@@ -145,7 +146,7 @@ func (s *Server) numberProbeProxy(ctx context.Context, payload map[string]any, c
 		proxy := map[string]any{"success": true, "accepted": true, "proxy_mode": "DIRECT", "country_code": "LOCAL"}
 		return DynamicProxyRoute{}, "", proxy, func() {}, nil
 	}
-	route, err := s.numberProbeGatewayProxy(ctx, correlationID)
+	route, err := s.numberProbeGatewayProxy(ctx, payload, correlationID)
 	if err != nil {
 		proxy := map[string]any{"success": true, "accepted": true, "proxy_mode": "DIRECT_FALLBACK", "country_code": "LOCAL", "fallback_reason": "dynamic_proxy_unavailable"}
 		return DynamicProxyRoute{}, "", proxy, func() {}, nil

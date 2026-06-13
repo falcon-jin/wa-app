@@ -166,14 +166,15 @@ func (p *DynamicProxyRuntime) GatewayProxyRoute(ctx context.Context, username st
 	}
 	routeID := proxyRouteID(rule.Username, routeReq)
 	accountID := routeID
+	countryCode := proxyRuntimeCountryCode(routeReq.CountryCode)
 	return DynamicProxyRoute{
 		AccountID:   accountID,
 		RouteID:     routeID,
 		Username:    rule.Username,
 		ProfileID:   rule.ProfileID,
 		ProxyURL:    proxyURL,
-		ProxyMode:   proxyRouteMode(routeReq.Mode),
-		CountryCode: "US",
+		ProxyMode:   proxyRouteModeForCountry(routeReq.Mode, countryCode),
+		CountryCode: countryCode,
 		ExpiresAt:   expiresAt,
 	}, nil
 }
@@ -251,7 +252,7 @@ func (p *DynamicProxyRuntime) GatewayLeaseProxyRoute(ctx context.Context, userna
 		Username:    rule.Username,
 		ProfileID:   profileID,
 		ProxyURL:    proxyURL,
-		ProxyMode:   proxyRouteMode(DynamicProxySessionModeSticky),
+		ProxyMode:   proxyRouteModeForCountry(DynamicProxySessionModeSticky, countryCode),
 		CountryCode: countryCode,
 		ExpiresAt:   expiresAt,
 	}, nil
@@ -450,13 +451,61 @@ func proxyRouteID(username string, req DynamicProxyRouteRequest) string {
 }
 
 func proxyRouteMode(mode DynamicProxySessionMode) string {
+	return proxyRouteModeForCountry(mode, "US")
+}
+
+func proxyRouteModeForCountry(mode DynamicProxySessionMode, countryCode string) string {
+	countryCode = proxyRuntimeCountryCode(countryCode)
 	switch mode {
 	case DynamicProxySessionModeRotating:
-		return "US_ROTATING_DYNAMIC_IP"
+		return countryCode + "_ROTATING_DYNAMIC_IP"
 	case DynamicProxySessionModeSticky:
-		return "US_STICKY_DYNAMIC_IP"
+		return countryCode + "_STICKY_DYNAMIC_IP"
 	default:
 		return "GATEWAY_PROFILE"
+	}
+}
+
+func proxyCountryCodeFromPayload(payload map[string]any) string {
+	phone := objectField(payload, "phone")
+	proxy := objectField(payload, "proxy")
+	value := firstNonEmpty(
+		textField(payload, "proxy_country_code"),
+		textField(proxy, "country_code"),
+		textField(proxy, "proxy_country_code"),
+		textField(payload, "country_iso2"),
+		textField(payload, "country_region"),
+		textField(payload, "region"),
+		textField(phone, "country_iso2"),
+	)
+	if value != "" {
+		return proxyRuntimeCountryCode(value)
+	}
+	callingCode := firstNonEmpty(
+		textField(payload, "country_calling_code"),
+		textField(payload, "cc"),
+		textField(payload, "country_code"),
+		textField(phone, "country_calling_code"),
+	)
+	return proxyRuntimeCountryCode(proxyCountryCodeFromCallingCode(callingCode))
+}
+
+func proxyCountryCodeFromCallingCode(value string) string {
+	switch strings.TrimPrefix(strings.TrimSpace(value), "+") {
+	case "1":
+		return "US"
+	case "48":
+		return "PL"
+	case "57":
+		return "CO"
+	case "63":
+		return "PH"
+	case "84":
+		return "VN"
+	case "86":
+		return "CN"
+	default:
+		return ""
 	}
 }
 
