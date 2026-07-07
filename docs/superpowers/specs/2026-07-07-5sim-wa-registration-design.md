@@ -19,19 +19,20 @@ The project boundary still applies: proto remains the WA application contract so
 
 Use a dashboard-only 5sim adapter and keep the existing manual registration flow intact.
 
-The service adds private HTTP endpoints under `/api/wa/debug/5sim/*`. These endpoints are served by the dashboard BFF, not by gRPC/proto. The frontend starts a bounded debug run by setting only the number of attempts. For each attempt, the BFF automatically selects an available WhatsApp-capable country/operator from 5sim inventory, buys one number, polls the order for an SMS code, and closes or cancels the order.
+The service adds private HTTP endpoints under `/api/wa/debug/5sim/*`. These endpoints are served by the dashboard BFF, not by gRPC/proto. The frontend starts a bounded debug run after the user selects a 5sim WhatsApp country, operator/channel, price constraint, and attempt count. For each attempt, the BFF validates the selected inventory, buys one number, polls the order for an SMS code, and closes or cancels the order.
 
 The dashboard then reuses the current WA registration path:
 
-1. User enters a debug attempt count and clicks start.
-2. Dashboard starts attempts serially to keep provider spend and WA rate limits bounded.
-3. For each attempt, dashboard calls the BFF to buy a 5sim activation number for product `whatsapp` using automatic inventory selection.
-4. Bought number is normalized through the same existing phone parsing path.
-5. Dashboard runs the existing SMS probe and registration request.
-6. When the existing WA flow reaches OTP waiting, dashboard polls the 5sim order.
-7. On first code, dashboard calls the existing OTP submit action.
-8. If OTP submit succeeds, dashboard calls 5sim finish and increments the success count.
-9. If any step fails, dashboard records the failure reason, increments the failure count, and cancels or leaves the order according to the failure point.
+1. User selects a country, operator/channel, and max price from live 5sim WhatsApp inventory.
+2. User enters a debug attempt count and clicks start.
+3. Dashboard starts attempts serially to keep provider spend and WA rate limits bounded.
+4. For each attempt, dashboard calls the BFF to buy a 5sim activation number for product `whatsapp` using the selected country/operator and price constraint.
+5. Bought number is normalized through the same existing phone parsing path.
+6. Dashboard runs the existing SMS probe and registration request.
+7. When the existing WA flow reaches OTP waiting, dashboard polls the 5sim order.
+8. On first code, dashboard calls the existing OTP submit action.
+9. If OTP submit succeeds, dashboard calls 5sim finish and increments the success count.
+10. If any step fails, dashboard records the failure reason, increments the failure count, and cancels or leaves the order according to the failure point.
 
 This keeps 5sim isolated from the core registration model and avoids duplicating the existing registration state machine.
 
@@ -65,7 +66,6 @@ Add a small package or BFF module for 5sim:
 
 - `FiveSimClient`: wraps HTTP calls, base URL, token, timeout, and response decoding.
 - `FiveSimInventory`: normalized view of WhatsApp country/operator inventory with `country`, `operator`, `cost`, `count`, and optional rate fields.
-- `FiveSimInventorySelector`: picks an eligible WhatsApp country/operator for automatic debug attempts. The default policy chooses the cheapest operator with `count > 0`; ties prefer higher count. A later configuration can restrict allowed countries/operators, but the UI does not expose those controls.
 - `FiveSimOrder`: normalized order view with `id`, `phone`, `country`, `operator`, `product`, `price`, `status`, `expires`, and redacted SMS metadata.
 - `FiveSimSMS`: internal representation with `code` and text, but API responses should only expose the code when the frontend explicitly checks an active order.
 
@@ -74,10 +74,10 @@ Dashboard endpoints:
 - `GET /api/wa/debug/5sim/status`
   - Returns whether token is configured.
 - `GET /api/wa/debug/5sim/whatsapp-inventory`
-  - Returns sorted WhatsApp country/operator inventory from guest prices for diagnostics and automatic selection. The initial UI does not render country/operator selectors.
+  - Returns sorted WhatsApp country/operator inventory from guest prices for UI selection.
 - `POST /api/wa/debug/5sim/orders`
-  - Request body: empty or optional internal filters.
-  - Selects an eligible WhatsApp country/operator, buys an activation, and returns the normalized order plus parsed phone fields.
+  - Request body: selected country, operator, and optional max price.
+  - Validates fresh inventory, buys a WhatsApp activation, and returns the normalized order plus parsed phone fields.
 - `GET /api/wa/debug/5sim/orders/{id}`
   - Checks current order status and SMS list.
 - `POST /api/wa/debug/5sim/orders/{id}/finish`
@@ -89,10 +89,10 @@ Dashboard endpoints:
 
 Request validation:
 
-- Country and operator, when supplied for internal testing, must be path-safe slugs from inventory only.
+- Country and operator are required for UI-driven runs and must be path-safe slugs from inventory only.
 - Product is fixed to `whatsapp` server-side.
 - Order id must be numeric.
-- Automatic buy must use fresh inventory and only choose entries with `count > 0`.
+- Buy must use fresh inventory, only accept entries with `count > 0`, and reject the request if the current cost is above the selected max price.
 
 Logging:
 
@@ -101,11 +101,14 @@ Logging:
 
 ## Frontend Components
 
-Add a compact 5sim debug panel inside `WaAccountAdd` above the manual phone fields or as a collapsible section. The panel is for repeated debug runs, not manual provider selection.
+Add a compact 5sim debug panel inside `WaAccountAdd` above the manual phone fields or as a collapsible section. The panel is for repeated debug runs using an explicitly selected 5sim country/operator/price constraint.
 
 Controls:
 
 - Enable status badge based on `/api/wa/debug/5sim/status`.
+- Country select populated from WhatsApp inventory.
+- Operator/channel select populated from the selected country, showing current cost and count.
+- Max price input; the start action is disabled when the selected operator cost exceeds it.
 - Numeric "debug attempts" input with a conservative bounded range, for example 1 to 20.
 - "Start debug" button.
 - Stop button while a run is active. Stop prevents new attempts; the current attempt finishes cleanup.
@@ -116,7 +119,7 @@ Controls:
 Flow behavior:
 
 - The run executes attempts serially until it reaches the requested debug count or the user stops it.
-- Each attempt buys one number through the automatic BFF selector.
+- Each attempt buys one number through the selected country/operator and max-price constraint.
 - The bought number fills `countryCallingCode` and `phone` using the normalized phone result from the BFF.
 - After buy, the UI automatically calls the existing probe path.
 - If probe allows SMS, the UI automatically starts the existing SMS registration path.
@@ -132,6 +135,7 @@ The manual phone input, manual probe, manual channel buttons, and manual OTP car
 - Token missing: disable panel and show not configured.
 - Inventory load failure: show retry without affecting manual registration.
 - No matching inventory: record a failure reason such as `NO_5SIM_STOCK` and stop the run because subsequent attempts would fail the same way.
+- Selected operator price above max price: block start in the UI; if the provider price changes between display and buy, record `PRICE_LIMIT_EXCEEDED`.
 - Buy failure: show provider error after sanitizing sensitive fields.
 - Phone normalization failure after buy: cancel the order if possible and show the validation error.
 - WA probe/register failure: keep the 5sim order visible so the user can cancel or ban it.
@@ -139,7 +143,7 @@ The manual phone input, manual probe, manual channel buttons, and manual OTP car
 - 5sim returns no SMS yet: continue polling until timeout.
 - OTP submit failure: do not finish order automatically; keep manual controls available.
 - Finish failure after successful registration: show warning, but do not roll back local WA registration state.
-- Failure reasons are grouped into stable keys for display: `NO_5SIM_STOCK`, `BUY_FAILED`, `PHONE_INVALID`, `WA_PROBE_FAILED`, `WA_REGISTER_FAILED`, `OTP_TIMEOUT`, `OTP_SUBMIT_FAILED`, `FINISH_FAILED`, and `CANCEL_FAILED`.
+- Failure reasons are grouped into stable keys for display: `NO_5SIM_STOCK`, `PRICE_LIMIT_EXCEEDED`, `BUY_FAILED`, `PHONE_INVALID`, `WA_PROBE_FAILED`, `WA_REGISTER_FAILED`, `OTP_TIMEOUT`, `OTP_SUBMIT_FAILED`, `FINISH_FAILED`, and `CANCEL_FAILED`.
 
 ## Security And Data Rules
 
@@ -163,7 +167,7 @@ Backend:
 Frontend:
 
 - API helper type coverage for status, inventory, buy, check, finish, cancel.
-- Component/source tests for: disabled when unconfigured, debug attempt count validation, serial attempt execution, success/failure counter updates, failure reason grouping, polling stop on code, and finish after successful submit.
+- Component/source tests for: disabled when unconfigured, country/operator option loading, price constraint validation, debug attempt count validation, serial attempt execution, success/failure counter updates, failure reason grouping, polling stop on code, and finish after successful submit.
 
 Verification:
 
@@ -178,4 +182,3 @@ Verification:
 - Supporting non-WhatsApp 5sim products.
 - Background jobs that continue after the dashboard session is closed.
 - Bypassing existing WA probe, registration, or OTP submit flows.
-- UI controls for manually choosing 5sim country, operator/channel, or price range.
