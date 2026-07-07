@@ -136,6 +136,7 @@ export const buyFiveSimWhatsAppOrder = (input: BuyFiveSimOrderInput) => api<Five
 export const checkFiveSimOrder = (id: number) => api<FiveSimOrder>(`/api/wa/debug/5sim/orders/${encodeURIComponent(String(id))}`);
 export const finishFiveSimOrder = (id: number) => api<FiveSimOrder>(`/api/wa/debug/5sim/orders/${encodeURIComponent(String(id))}/finish`, { method: 'POST' });
 export const cancelFiveSimOrder = (id: number) => api<FiveSimOrder>(`/api/wa/debug/5sim/orders/${encodeURIComponent(String(id))}/cancel`, { method: 'POST' });
+export const banFiveSimOrder = (id: number) => api<FiveSimOrder>(`/api/wa/debug/5sim/orders/${encodeURIComponent(String(id))}/ban`, { method: 'POST' });
 
 export async function getWaTwoFactorAuthStatus(account: WAAccount, input: { remoteRefresh?: boolean } = {}) {
   const accountID = waAccountID(account);

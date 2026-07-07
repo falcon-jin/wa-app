@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+node_modules
+webui/node_modules
+webui/dist
+gen
+coverage
+*.log

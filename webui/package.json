@@ -6,7 +6,8 @@
   "scripts": {
     "proto": "../scripts/generate-web-proto.sh",
     "build": "npm run proto && vite build",
-    "lint": "eslint . && tsc --noEmit"
+    "lint": "eslint . && tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.14",
@@ -44,6 +45,7 @@
     "ts-proto": "^2.11.8",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.60.0",
-    "vite": "^7.3.0"
+    "vite": "^7.3.0",
+    "vitest": "^4.1.10"
   }
 }
