@@ -17,7 +17,8 @@ RUN set -eux; \
     cp -a "$wa_src/proto" /app/wa-app/proto; \
     cp -a "$wa_src/scripts" /app/wa-app/scripts; \
     cp -a "$wa_src/webui" /app/wa-app/webui; \
-    rm -rf /src
+    rm -rf /src; \
+    find /app/wa-app/scripts -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 WORKDIR /app/wa-app/webui
 RUN npm ci --prefer-offline --no-audit --fund=false && npm run build
 
@@ -34,6 +35,7 @@ RUN set -eux; \
     if [ -d /src/wa-app ]; then wa_src=/src/wa-app; fi; \
     cp -a "$wa_src/." /app/wa-app/; \
     rm -rf /src; \
+    find scripts -type f -name '*.sh' -exec sed -i 's/\r$//' {} +; \
     go mod download
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 \
     && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2 \
