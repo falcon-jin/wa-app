@@ -21,9 +21,11 @@ import {
 import {
   compareFiveSimInventoryQuality,
   errorMessage,
+  fiveSimCountryLabel,
   fiveSimFailureAction,
   fiveSimFailureReason,
   fiveSimFailureReasonLabel,
+  fiveSimProductLabel,
   localizedFiveSimErrorMessage,
   type FiveSimFailureAction,
 } from './wa-5sim-debug-model';
@@ -56,6 +58,7 @@ export function WaFiveSimDebugPanel({ disabled, waBusy, onRunRegistration, onSub
   const [loadError, setLoadError] = useState('');
   const [country, setCountry] = useState('');
   const [operator, setOperator] = useState('');
+  const product = 'whatsapp';
   const [maxPrice, setMaxPrice] = useState('');
   const [attempts, setAttempts] = useState('1');
   const [running, setRunning] = useState(false);
@@ -92,7 +95,8 @@ export function WaFiveSimDebugPanel({ disabled, waBusy, onRunRegistration, onSub
   }, [refresh]);
 
   const countries = useMemo(() => {
-    return [...new Set(inventory.map((item) => item.country))].sort();
+    return [...new Set(inventory.map((item) => item.country))]
+      .sort((a, b) => fiveSimCountryLabel(a).localeCompare(fiveSimCountryLabel(b), 'zh-Hans-CN'));
   }, [inventory]);
 
   const operators = useMemo(() => {
@@ -219,7 +223,18 @@ export function WaFiveSimDebugPanel({ disabled, waBusy, onRunRegistration, onSub
         </div>
       </div>
       <FieldGroup className="gap-3">
-        <div className="grid gap-3 md:grid-cols-[1fr_1fr_120px_110px]">
+        <div className="grid gap-3 md:grid-cols-[150px_1fr_1fr_120px_110px]">
+          <Field>
+            <FieldLabel>服务</FieldLabel>
+            <Select value={product} disabled>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="选择服务" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="whatsapp">{fiveSimProductLabel('whatsapp')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
           <Field>
             <FieldLabel>国家</FieldLabel>
             <Select value={country} disabled={running || loading || countries.length === 0} onValueChange={setCountry}>
@@ -227,7 +242,7 @@ export function WaFiveSimDebugPanel({ disabled, waBusy, onRunRegistration, onSub
                 <SelectValue placeholder="选择国家" />
               </SelectTrigger>
               <SelectContent>
-                {countries.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                {countries.map((item) => <SelectItem key={item} value={item}>{fiveSimCountryLabel(item)}</SelectItem>)}
               </SelectContent>
             </Select>
           </Field>

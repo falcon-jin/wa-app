@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { compareFiveSimInventoryQuality, fiveSimFailureAction, fiveSimFailureReason } from './wa-5sim-debug-model';
+import {
+  compareFiveSimInventoryQuality,
+  fiveSimCountryLabel,
+  fiveSimFailureAction,
+  fiveSimFailureReason,
+  fiveSimProductLabel,
+} from './wa-5sim-debug-model';
 
 describe('fiveSimFailureAction', () => {
   test('bans a 5sim number when WA rejects or blocks it', () => {
@@ -26,5 +32,16 @@ describe('compareFiveSimInventoryQuality', () => {
     ];
 
     expect([...items].sort(compareFiveSimInventoryQuality)[0]?.operator).toBe('better-rate');
+  });
+});
+
+describe('fiveSim labels', () => {
+  test('displays 5sim country slugs in Chinese while keeping the original value available', () => {
+    expect(fiveSimCountryLabel('argentina')).toBe('阿根廷');
+    expect(fiveSimCountryLabel('antiguaandbarbuda')).toBe('安提瓜和巴布达');
+  });
+
+  test('displays whatsapp as WhatsApp service', () => {
+    expect(fiveSimProductLabel('whatsapp')).toBe('WhatsApp');
   });
 });
