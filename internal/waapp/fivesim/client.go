@@ -204,6 +204,9 @@ func NormalizeWhatsAppInventory(raw []byte) ([]InventoryItem, error) {
 }
 
 func DecodeOrder(raw []byte) (Order, error) {
+	if message := fiveSimResponseError(raw); message != "" {
+		return Order{}, fmt.Errorf("5sim response error: %s", SanitizeAPIError(message))
+	}
 	var payload struct {
 		ID       json.Number `json:"id"`
 		Phone    string      `json:"phone"`
@@ -245,6 +248,30 @@ func DecodeOrder(raw []byte) (Order, error) {
 		}
 	}
 	return order, nil
+}
+
+func fiveSimResponseError(raw []byte) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return "empty response"
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	var payload map[string]any
+	if err := decodeJSON(raw, &payload); err != nil {
+		return string(raw)
+	}
+	for _, key := range []string{"error", "message", "detail"} {
+		if value := strings.TrimSpace(textValue(payload[key])); value != "" {
+			return value
+		}
+	}
+	if textValue(payload["id"]) == "" && textValue(payload["phone"]) == "" {
+		return "unexpected 5sim response"
+	}
+	return ""
 }
 
 func ValidateBuyRequest(req BuyRequest) error {
@@ -321,6 +348,19 @@ func objectMap(value any) map[string]any {
 		return typed
 	}
 	return nil
+}
+
+func textValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	case float64:
+		return trimFloat(typed)
+	default:
+		return ""
+	}
 }
 
 func numberField(data map[string]any, key string) float64 {

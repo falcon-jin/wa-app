@@ -65,6 +65,30 @@ func TestDecodeOrderExtractsSMSCodeWithoutExposingText(t *testing.T) {
 	}
 }
 
+func TestDecodeOrderReturns5SimTextError(t *testing.T) {
+	_, err := DecodeOrder([]byte(`no free phones for +447350690992 with code 123456`))
+	if err == nil {
+		t.Fatal("DecodeOrder returned nil, want 5sim response error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "no free phones") {
+		t.Fatalf("error = %q, want 5sim text reason", got)
+	}
+	if strings.Contains(got, "+447350690992") || strings.Contains(got, "123456") {
+		t.Fatalf("error leaked sensitive value: %q", got)
+	}
+}
+
+func TestDecodeOrderReturns5SimJSONError(t *testing.T) {
+	_, err := DecodeOrder([]byte(`{"error":"not enough balance","phone":"+447350690992"}`))
+	if err == nil {
+		t.Fatal("DecodeOrder returned nil, want 5sim response error")
+	}
+	if got := err.Error(); got != "5sim response error: not enough balance" {
+		t.Fatalf("error = %q", got)
+	}
+}
+
 func TestValidateBuyRequestRejectsMaxPriceBelowInventory(t *testing.T) {
 	err := ValidateBuyRequest(BuyRequest{
 		Country:  "argentina",
