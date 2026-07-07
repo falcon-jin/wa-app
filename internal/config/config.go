@@ -18,6 +18,8 @@ type Config struct {
 	DeviceProfilesFile    string `env:"WA_APP_DEVICE_PROFILES_FILE"`
 	PlayIntegrityAPIURL   string `env:"WA_APP_PLAY_INTEGRITY_API_URL"`
 	PlayIntegrityAPIToken string `env:"WA_APP_PLAY_INTEGRITY_API_TOKEN"`
+	FiveSimToken          string `env:"WA_APP_5SIM_TOKEN"`
+	FiveSimAPIBaseURL     string `env:"WA_APP_5SIM_API_BASE_URL"`
 }
 
 func Load() Config {

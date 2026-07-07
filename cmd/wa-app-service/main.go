@@ -105,7 +105,10 @@ func main() {
 		return nil
 	})
 	group.Go(func() error {
-		return runDashboardHTTP(groupCtx, dashboardHTTPAddr, dashboardStaticDir, service, newWAActionHandler(service), authConfig)
+		return runDashboardHTTP(groupCtx, dashboardHTTPAddr, dashboardStaticDir, service, newWAActionHandler(service), authConfig, dashboardFiveSimConfig{
+			Token:      cfg.FiveSimToken,
+			APIBaseURL: cfg.FiveSimAPIBaseURL,
+		})
 	})
 	group.Go(func() error {
 		return service.RunLongConnections(groupCtx)

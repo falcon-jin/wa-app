@@ -31,9 +31,10 @@ type dashboardHTTP struct {
 	staticDir     string
 	service       *rpc.Server
 	actionHandler http.Handler
+	fiveSim       dashboardFiveSimConfig
 }
 
-func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service *rpc.Server, actionHandler http.Handler, auth dashboardAuthConfig) error {
+func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service *rpc.Server, actionHandler http.Handler, auth dashboardAuthConfig, fiveSim dashboardFiveSimConfig) error {
 	if strings.TrimSpace(listenAddr) == "" {
 		return nil
 	}
@@ -41,12 +42,17 @@ func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service
 		staticDir:     firstNonEmpty(staticDir, "/app/dashboard/wa"),
 		service:       service,
 		actionHandler: actionHandler,
+		fiveSim:       fiveSim,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/wa/health", server.handleHealth)
 	mux.HandleFunc("/api/wa/play-integrity/status", server.handlePlayIntegrityAPIStatus)
 	mux.HandleFunc("/api/wa/phone/sms-probe", server.handlePhoneSMSProbe)
 	mux.HandleFunc("/api/wa/register", server.handleRegister)
+	mux.HandleFunc("/api/wa/debug/5sim/status", server.handleFiveSimStatus)
+	mux.HandleFunc("/api/wa/debug/5sim/whatsapp-inventory", server.handleFiveSimWhatsAppInventory)
+	mux.HandleFunc("/api/wa/debug/5sim/orders", server.handleFiveSimOrders)
+	mux.HandleFunc("/api/wa/debug/5sim/orders/", server.handleFiveSimOrderResource)
 	mux.HandleFunc("/api/wa/login-state-check", server.handleLoginStateCheck)
 	mux.HandleFunc("/api/wa/account-settings/2fa/status", server.handleGetTwoFactorAuthStatus)
 	mux.HandleFunc("/api/wa/account-settings/2fa", server.handleSetTwoFactorAuthSettings)

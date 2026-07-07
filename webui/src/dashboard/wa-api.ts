@@ -10,6 +10,11 @@ export const ACCOUNT_PAGE_SIZE = 100;
 
 export type WaPhoneInput = { region: string; phone: string; e164_number: string; country_calling_code: string; country_iso2: string };
 export type WaWorkflowResponse = { success?: boolean; passed?: boolean; request_failed?: boolean; retry_after_seconds?: number; status?: string; error_message?: string; reject_reason?: string; wa_account_id?: string; client_profile_id?: string; protocol_profile_id?: string; verification_request_id?: string; delivery_method?: string; method?: string; registration_phase?: string; method_statuses?: unknown[]; phone_status?: Record<string, unknown>; account_probe?: Record<string, unknown>; sms_probe?: Record<string, unknown>; phone?: Record<string, unknown>; proxy?: Record<string, unknown>; verification_request?: Record<string, unknown>; account_transfer_challenge?: Record<string, unknown>; registration?: Record<string, unknown>; login_state?: Record<string, unknown>; check?: Record<string, unknown> };
+export type FiveSimStatus = { configured: boolean; product: 'whatsapp' | string };
+export type FiveSimInventoryItem = { country: string; operator: string; cost: number; count: number; rate?: number };
+export type FiveSimInventoryResponse = { items: FiveSimInventoryItem[] };
+export type FiveSimOrder = { id: number; phone: string; country?: string; operator?: string; product?: string; price?: number; status?: string; expires?: string; sms_code?: string; sms_count: number; phone_target?: WaPhoneInput };
+export type BuyFiveSimOrderInput = { country: string; operator: string; max_price?: number };
 export type WaConnectionState = LongConnectionState;
 export type WaConnectionFilters = { login_state_id?: string; wa_account_id?: string; client_profile_id?: string; registered_identity_id?: string };
 export type WaAccountProjection = WAAccount;
@@ -28,8 +33,19 @@ export const waKeys = {
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) } });
   if (resp.status === 401) redirectToLogin();
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(await responseErrorMessage(resp));
   return resp.json() as Promise<T>;
+}
+
+async function responseErrorMessage(resp: Response) {
+  try {
+    const payload = await resp.clone().json() as { error?: unknown; message?: unknown };
+    const message = typeof payload.error === 'string' ? payload.error : typeof payload.message === 'string' ? payload.message : '';
+    if (message.trim()) return message;
+  } catch {
+    // Fall back to status below.
+  }
+  return `HTTP ${resp.status}`;
 }
 
 function redirectToLogin() {
@@ -114,6 +130,12 @@ export async function cleanupPendingRegistrationWaAccounts() {
 export const probeWaPhoneSMS = (input: WaPhoneInput) => api<WaWorkflowResponse>('/api/wa/phone/sms-probe', { method: 'POST', body: JSON.stringify(input) });
 export const registerWaPhone = (input: WaPhoneInput, deliveryMethod: VerificationDeliveryMethod, integrityMode?: WaIntegrityMode) => api<WaWorkflowResponse>('/api/wa/register', { method: 'POST', body: JSON.stringify({ ...input, delivery_method: deliveryMethod, ...(integrityMode ? { integrity_mode: integrityMode } : {}) }) });
 export const checkWaLoginState = (input: { login_state_id?: string; registered_identity_id?: string; wa_account_id?: string; client_profile_id?: string; remote_timeout_seconds?: number }) => api<WaWorkflowResponse>('/api/wa/login-state-check', { method: 'POST', body: JSON.stringify(input) });
+export const getFiveSimStatus = () => api<FiveSimStatus>('/api/wa/debug/5sim/status');
+export const getFiveSimWhatsAppInventory = () => api<FiveSimInventoryResponse>('/api/wa/debug/5sim/whatsapp-inventory');
+export const buyFiveSimWhatsAppOrder = (input: BuyFiveSimOrderInput) => api<FiveSimOrder>('/api/wa/debug/5sim/orders', { method: 'POST', body: JSON.stringify(input) });
+export const checkFiveSimOrder = (id: number) => api<FiveSimOrder>(`/api/wa/debug/5sim/orders/${encodeURIComponent(String(id))}`);
+export const finishFiveSimOrder = (id: number) => api<FiveSimOrder>(`/api/wa/debug/5sim/orders/${encodeURIComponent(String(id))}/finish`, { method: 'POST' });
+export const cancelFiveSimOrder = (id: number) => api<FiveSimOrder>(`/api/wa/debug/5sim/orders/${encodeURIComponent(String(id))}/cancel`, { method: 'POST' });
 
 export async function getWaTwoFactorAuthStatus(account: WAAccount, input: { remoteRefresh?: boolean } = {}) {
   const accountID = waAccountID(account);
