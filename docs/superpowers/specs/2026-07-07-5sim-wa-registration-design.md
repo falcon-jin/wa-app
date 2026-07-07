@@ -32,7 +32,7 @@ The dashboard then reuses the current WA registration path:
 7. When the existing WA flow reaches OTP waiting, dashboard polls the 5sim order.
 8. On first code, dashboard calls the existing OTP submit action.
 9. If OTP submit succeeds, dashboard calls 5sim finish and increments the success count.
-10. If any step fails, dashboard records the failure reason, increments the failure count, and cancels or leaves the order according to the failure point.
+10. If any step fails after a 5sim order was created and before that order was finished, dashboard records the failure reason, increments the failure count, and calls the 5sim cancel endpoint when the order is still cancelable.
 
 This keeps 5sim isolated from the core registration model and avoids duplicating the existing registration state machine.
 
@@ -83,7 +83,7 @@ Dashboard endpoints:
 - `POST /api/wa/debug/5sim/orders/{id}/finish`
   - Finishes an order after successful OTP submit.
 - `POST /api/wa/debug/5sim/orders/{id}/cancel`
-  - Cancels an unused order.
+  - Cancels an unused, failed, or SMS-timeout order.
 - `POST /api/wa/debug/5sim/orders/{id}/ban`
   - Optional manual action for numbers that cannot receive a usable OTP.
 
@@ -126,6 +126,7 @@ Flow behavior:
 - After registration returns `wa_account_id` and `verification_request_id`, the UI polls the 5sim order every 5 seconds for up to a bounded timeout.
 - When a code appears, the UI sets the OTP state and calls the existing `submitWaRegistrationOTP` helper.
 - On submit success, the UI calls finish, refreshes accounts, and records a successful attempt.
+- On SMS poll timeout, the UI records `OTP_TIMEOUT`, calls the 5sim cancel endpoint immediately, and then continues to the next attempt unless stopped.
 - On any failure, the UI records a normalized failure reason and sanitized message, then continues to the next attempt unless stopped.
 
 The manual phone input, manual probe, manual channel buttons, and manual OTP card remain available.
@@ -139,10 +140,11 @@ The manual phone input, manual probe, manual channel buttons, and manual OTP car
 - Buy failure: show provider error after sanitizing sensitive fields.
 - Phone normalization failure after buy: cancel the order if possible and show the validation error.
 - WA probe/register failure: keep the 5sim order visible so the user can cancel or ban it.
-- Poll timeout: stop polling and offer cancel.
+- Poll timeout: stop polling, call the 5sim cancel endpoint immediately, and record `OTP_TIMEOUT`.
 - 5sim returns no SMS yet: continue polling until timeout.
 - OTP submit failure: do not finish order automatically; keep manual controls available.
 - Finish failure after successful registration: show warning, but do not roll back local WA registration state.
+- Cancel failure after timeout: keep the original timeout failure visible and add or increment `CANCEL_FAILED` with the sanitized cancel error.
 - Failure reasons are grouped into stable keys for display: `NO_5SIM_STOCK`, `PRICE_LIMIT_EXCEEDED`, `BUY_FAILED`, `PHONE_INVALID`, `WA_PROBE_FAILED`, `WA_REGISTER_FAILED`, `OTP_TIMEOUT`, `OTP_SUBMIT_FAILED`, `FINISH_FAILED`, and `CANCEL_FAILED`.
 
 ## Security And Data Rules
