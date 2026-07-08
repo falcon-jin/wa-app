@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LoaderCircle, Play, RefreshCcw, Search, Square } from 'lucide-react';
+import { Check, ChevronDown, LoaderCircle, Play, RefreshCcw, Search, Square } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
@@ -290,26 +290,15 @@ export function WaFiveSimDebugPanel({ disabled, waBusy, onRunRegistration, onSub
           </Field>
           <Field>
             <FieldLabel>国家</FieldLabel>
-            <Select value={country} disabled={running || loading || countries.length === 0} onOpenChange={(open) => { if (!open) setCountrySearch(''); }} onValueChange={setCountry}>
-              <SelectTrigger className="w-full min-w-0">
-                <SelectValue placeholder="选择国家">{country ? fiveSimCountryLabel(country) : '选择国家'}</SelectValue>
-              </SelectTrigger>
-              <SelectContent className="min-w-64">
-                <div className="sticky top-0 z-10 bg-popover p-2">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      className="h-8 pl-7 text-xs"
-                      value={countrySearch}
-                      placeholder="搜索中文或 5sim 国家值"
-                      onChange={(event) => setCountrySearch(event.target.value)}
-                      onKeyDown={(event) => event.stopPropagation()}
-                    />
-                  </div>
-                </div>
-                {filteredCountries.length ? filteredCountries.map((item) => <SelectItem key={item} value={item}>{fiveSimCountryLabel(item)}</SelectItem>) : <div className="px-3 py-2 text-xs text-muted-foreground">没有匹配国家</div>}
-              </SelectContent>
-            </Select>
+            <CountrySearchSelect
+              value={country}
+              countries={countries}
+              filteredCountries={filteredCountries}
+              search={countrySearch}
+              disabled={running || loading || countries.length === 0}
+              onSearchChange={setCountrySearch}
+              onValueChange={setCountry}
+            />
           </Field>
           <Field className="sm:col-span-2">
             <FieldLabel>渠道</FieldLabel>
@@ -384,6 +373,111 @@ export function WaFiveSimDebugPanel({ disabled, waBusy, onRunRegistration, onSub
           </div>
         </div>
       </FieldGroup>
+    </div>
+  );
+}
+
+function CountrySearchSelect({
+  value,
+  countries,
+  filteredCountries,
+  search,
+  disabled,
+  onSearchChange,
+  onValueChange,
+}: {
+  value: string;
+  countries: string[];
+  filteredCountries: string[];
+  search: string;
+  disabled?: boolean;
+  onSearchChange: (value: string) => void;
+  onValueChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const selectedLabel = value ? fiveSimCountryLabel(value) : '';
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && rootRef.current?.contains(target)) return;
+      setOpen(false);
+      onSearchChange('');
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [onSearchChange, open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const timer = window.setTimeout(() => searchRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+
+  function selectCountry(nextValue: string) {
+    onValueChange(nextValue);
+    onSearchChange('');
+    setOpen(false);
+  }
+
+  return (
+    <div ref={rootRef} className="relative">
+      <Button
+        type="button"
+        variant="outline"
+        className="h-8 w-full justify-between gap-2 px-2.5 text-left font-normal"
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className={selectedLabel ? 'truncate' : 'truncate text-muted-foreground'}>{selectedLabel || '选择国家'}</span>
+        <ChevronDown size={14} className="shrink-0 text-muted-foreground" />
+      </Button>
+      {open ? (
+        <div className="absolute left-0 top-full z-50 mt-1 w-full min-w-64 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-md">
+          <div className="border-b border-border p-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                ref={searchRef}
+                className="h-8 pl-7 text-xs"
+                value={search}
+                placeholder="搜索中文或 5sim 国家值"
+                autoComplete="off"
+                onChange={(event) => onSearchChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    setOpen(false);
+                    onSearchChange('');
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="max-h-64 overflow-y-auto p-1" role="listbox">
+            {filteredCountries.length ? filteredCountries.map((item) => {
+              const selected = item === value;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className="flex h-8 w-full items-center justify-between gap-2 rounded-md px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                  onClick={() => selectCountry(item)}
+                >
+                  <span className="truncate">{fiveSimCountryLabel(item)}</span>
+                  {selected ? <Check size={14} className="shrink-0" /> : null}
+                </button>
+              );
+            }) : <div className="px-2 py-2 text-xs text-muted-foreground">{countries.length ? '没有匹配国家' : '暂无国家库存'}</div>}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
