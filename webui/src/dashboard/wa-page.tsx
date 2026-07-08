@@ -117,7 +117,7 @@ function NoAccount() {
 }
 
 function PageShell({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="grid h-dvh grid-rows-[auto_1fr] bg-background"><header className="flex h-16 items-center border-b border-border bg-card px-5"><h1 className="text-base font-semibold">{title}</h1></header><main className="min-h-0 overflow-y-auto p-6"><div className="mx-auto max-w-3xl">{children}</div></main></section>;
+  return <section className="grid h-dvh grid-rows-[auto_1fr] bg-background"><header className="flex h-16 items-center border-b border-border bg-card px-5"><h1 className="text-base font-semibold">{title}</h1></header><main className="min-h-0 overflow-y-auto p-6"><div className="mx-auto max-w-5xl">{children}</div></main></section>;
 }
 
 function PageCenter({ children }: { children: ReactNode }) {

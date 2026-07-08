@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   compareFiveSimInventoryQuality,
+  filterFiveSimCountries,
   fiveSimCountryLabel,
   fiveSimFailureAction,
   fiveSimFailureReason,
@@ -43,5 +44,15 @@ describe('fiveSim labels', () => {
 
   test('displays whatsapp as WhatsApp service', () => {
     expect(fiveSimProductLabel('whatsapp')).toBe('WhatsApp');
+  });
+});
+
+describe('filterFiveSimCountries', () => {
+  test('filters countries by Chinese label or raw 5sim value', () => {
+    const countries = ['argentina', 'unitedstates', 'antiguaandbarbuda'];
+
+    expect(filterFiveSimCountries(countries, '美国')).toEqual(['unitedstates']);
+    expect(filterFiveSimCountries(countries, 'united states')).toEqual(['unitedstates']);
+    expect(filterFiveSimCountries(countries, '安提瓜')).toEqual(['antiguaandbarbuda']);
   });
 });

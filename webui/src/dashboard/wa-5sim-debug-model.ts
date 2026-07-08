@@ -190,6 +190,15 @@ export function fiveSimProductLabel(product: string) {
   return normalizeFiveSimKey(product) === 'whatsapp' ? 'WhatsApp' : product;
 }
 
+export function filterFiveSimCountries(countries: string[], query: string) {
+  const normalizedQuery = normalizeFiveSimSearchText(query);
+  if (!normalizedQuery) return countries;
+  return countries.filter((country) => {
+    return normalizeFiveSimSearchText(country).includes(normalizedQuery)
+      || normalizeFiveSimSearchText(fiveSimCountryLabel(country)).includes(normalizedQuery);
+  });
+}
+
 export function compareFiveSimInventoryQuality(a: FiveSimInventoryQuality, b: FiveSimInventoryQuality) {
   const aAvailable = a.count > 0 ? 1 : 0;
   const bAvailable = b.count > 0 ? 1 : 0;
@@ -256,6 +265,10 @@ export function errorMessage(error: unknown) {
 
 function normalizeFiveSimKey(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeFiveSimSearchText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, '');
 }
 
 function waNumberRejectedOrBlocked(message: string) {
