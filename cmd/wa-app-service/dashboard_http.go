@@ -32,6 +32,7 @@ type dashboardHTTP struct {
 	service       *rpc.Server
 	actionHandler http.Handler
 	fiveSim       dashboardFiveSimConfig
+	fiveSimTasks  *fiveSimRegistrationTaskManager
 }
 
 func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service *rpc.Server, actionHandler http.Handler, auth dashboardAuthConfig, fiveSim dashboardFiveSimConfig) error {
@@ -44,6 +45,7 @@ func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service
 		actionHandler: actionHandler,
 		fiveSim:       fiveSim,
 	}
+	server.fiveSimTasks = server.newFiveSimRegistrationTaskManager(ctx)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/wa/health", server.handleHealth)
 	mux.HandleFunc("/api/wa/play-integrity/status", server.handlePlayIntegrityAPIStatus)
@@ -51,6 +53,8 @@ func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service
 	mux.HandleFunc("/api/wa/register", server.handleRegister)
 	mux.HandleFunc("/api/wa/debug/5sim/status", server.handleFiveSimStatus)
 	mux.HandleFunc("/api/wa/debug/5sim/whatsapp-inventory", server.handleFiveSimWhatsAppInventory)
+	mux.HandleFunc("/api/wa/debug/5sim/registration-tasks", server.handleFiveSimRegistrationTasks)
+	mux.HandleFunc("/api/wa/debug/5sim/registration-tasks/", server.handleFiveSimRegistrationTaskResource)
 	mux.HandleFunc("/api/wa/debug/5sim/orders", server.handleFiveSimOrders)
 	mux.HandleFunc("/api/wa/debug/5sim/orders/", server.handleFiveSimOrderResource)
 	mux.HandleFunc("/api/wa/login-state-check", server.handleLoginStateCheck)

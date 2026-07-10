@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { probeWaPhoneSMS, registerWaPhone, submitWaRegistrationOTP, type WaPhoneInput, type WaWorkflowResponse } from './wa-api';
+import { probeWaPhoneSMS, registerWaPhone, submitWaRegistrationOTP, type WaWorkflowResponse } from './wa-api';
 import { probeMatchesValues, registrationFailureMessage, workflowText, type WaAccountAddProbeState } from './wa-account-add-model';
 import { WaFiveSimDebugPanel } from './wa-5sim-debug-panel';
 import { WhatsAppIcon } from './wa-brand-icon';
@@ -20,11 +20,9 @@ import { WaRegistrationOtpCard, WA_REGISTRATION_OTP_LENGTH } from './wa-registra
 import {
   registrationAnyMethodAvailable,
   registrationChannelsHardBlocked,
-  registrationMethodAvailable,
   registrationMinimumCooldownSeconds,
   type SelectableRegistrationMethodOption,
 } from './wa-registration-methods';
-import { VerificationDeliveryMethod } from '../proto/byte/v/forge/waapp/v1/registration';
 import { resolveWaPhoneTarget, type WaResolvedPhone } from './wa-utils';
 type PendingRegistration = { accountID: string; verificationRequestID: string };
 type Props = { disabled?: boolean; onChanged: () => void | Promise<void>; onDone: (message: string) => void; onError: (message: string) => void };
@@ -130,66 +128,6 @@ export function WaAccountAdd({ disabled, onChanged, onDone, onError }: Props) {
       setBusy(false);
     }
   }
-  async function runFiveSimRegistration(input: WaPhoneInput) {
-    const target = { e164: input.e164_number, input };
-    setPhone(input.phone);
-    setCountryCallingCode(input.country_calling_code);
-    setBusy(true);
-    try {
-      setRegistrationResult(null);
-      setRegistrationTarget(null);
-      setPending(null);
-      const probeResult = await probeWaPhoneSMS(input);
-      resetCooldownClock();
-      setProbe({ target, result: probeResult });
-      const probeStatus = waProbeStatus(probeResult);
-      const smsMethod = VerificationDeliveryMethod.VERIFICATION_DELIVERY_METHOD_SMS;
-      if (!registrationMethodAvailable(probeStatus, smsMethod, 0)) {
-        throw new Error(registrationFailureMessage(probeResult, probeStatus));
-      }
-      const result = await registerWaPhone(input, smsMethod, playIntegrityAvailable ? integrityMode : undefined);
-      const resultStatus = waProbeStatus(result);
-      resetCooldownClock();
-      setRegistrationResult(result);
-      setRegistrationTarget(target);
-      if (result.success === false || result.error_message || resultStatus.blocked === true || resultStatus.requestFailed) {
-        throw new Error(registrationFailureMessage(result, resultStatus));
-      }
-      const accountID = workflowText(result, 'wa_account_id');
-      const verificationRequestID = workflowText(result, 'verification_request_id');
-      if (!accountID) throw new Error('WA registration did not return account id');
-      setPending({ accountID, verificationRequestID });
-      setProbe(null);
-      setOtp('');
-      onDone('5sim WA OTP requested');
-      await onChanged();
-      return { accountID };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      onError(message);
-      throw new Error(message, { cause: error });
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function submitFiveSimOTP(accountID: string, code: string) {
-    setBusy(true);
-    try {
-      setOtp(code);
-      const result = await submitWaRegistrationOTP(accountID, code);
-      if (result.success === false || result.error_message) throw new Error(accountReasonLabel(result.error_message, result.status) || 'OTP submit failed');
-      setOtp('');
-      setPending(null);
-      onDone('5sim OTP submitted');
-      await onChanged();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      onError(message);
-      throw new Error(message, { cause: error });
-    } finally {
-      setBusy(false);
-    }
-  }
   function resetCooldownClock() {
     const now = Date.now();
     setCooldownStartedAt(now);
@@ -208,8 +146,6 @@ export function WaAccountAdd({ disabled, onChanged, onDone, onError }: Props) {
         <WaFiveSimDebugPanel
           disabled={disabled}
           waBusy={busy}
-          onRunRegistration={runFiveSimRegistration}
-          onSubmitOTP={submitFiveSimOTP}
         />
         <FieldGroup>
           <div className="grid gap-3 sm:grid-cols-[160px_1fr]">

@@ -32,6 +32,12 @@ func NewActionGateway(server *rpc.Server) http.Handler {
 	return &actionGateway{server: server}
 }
 
+// ResumeRegistrationOTP submits an OTP through the dashboard registration action
+// path without exposing provider-specific debug task details in proto contracts.
+func ResumeRegistrationOTP(server *rpc.Server, ctx context.Context, payload map[string]any) (map[string]any, error) {
+	return (&actionGateway{server: server}).resumeOTP(ctx, payload)
+}
+
 func (g *actionGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
