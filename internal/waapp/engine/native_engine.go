@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -760,17 +761,20 @@ func (e *messagingService) DecryptMessage(ctx context.Context, input wacore.Engi
 		if err != nil {
 			return wacore.EngineDecryptResult{Err: shared.NewError(waappv1.WaErrorCode_WA_ERROR_CODE_DECRYPTION_FAILED, "native Signal message decryption failed", true)}
 		}
+		decryptedID := e.ids.NewID("wadec_")
+		plaintextRef := "native-plain:" + decryptedID
 		if commit {
 			_ = applyNativeAppStateKeys(&state, output.plaintext)
+			state.ensureMaps()
+			state.MessagePlainRef[plaintextRef] = base64.StdEncoding.EncodeToString(output.plaintext)
 			_ = e.SaveState(ctx, input.ClientProfileID, state)
 		}
-		decryptedID := e.ids.NewID("wadec_")
 		plain := nativePlaintextText(output.plaintext)
-		text := &waappv1.SensitiveText{RedactedValue: shared.Redacted(plain), SecretRef: "native-plain:" + decryptedID}
+		text := &waappv1.SensitiveText{RedactedValue: shared.Redacted(plain), SecretRef: plaintextRef}
 		if input.IncludePlaintextText {
 			text.Value = plain
 		}
-		msg := &waappv1.DecryptedMessage{DecryptedMessageId: decryptedID, MessageId: input.MessageID, Status: waappv1.DecryptionStatus_DECRYPTION_STATUS_DECRYPTED, PlaintextRef: "native-plain:" + decryptedID, PlaintextText: text, DecryptedAt: timestamppb.New(e.clock.Now())}
+		msg := &waappv1.DecryptedMessage{DecryptedMessageId: decryptedID, MessageId: input.MessageID, Status: waappv1.DecryptionStatus_DECRYPTION_STATUS_DECRYPTED, PlaintextRef: plaintextRef, PlaintextText: text, DecryptedAt: timestamppb.New(e.clock.Now())}
 		contactHints := nativeContactHints(output.plaintext)
 		contactHints = append(contactHints, nativeAppStateContactHints(&state, output.plaintext)...)
 		contactHints = append(contactHints, contactHintsFromNativePayloadMetadata(payload)...)

@@ -115,10 +115,17 @@ func MessageDisplayText(raw []byte) (string, bool) {
 }
 
 func collectWAMessageText(raw []byte, path []protowire.Number, depth int, candidates *[]waMessageTextCandidate) {
+	collectWAMessageTextWithOptions(raw, path, depth, candidates, true)
+}
+
+func collectWAMessageTextWithOptions(raw []byte, path []protowire.Number, depth int, candidates *[]waMessageTextCandidate, allowLenientTopLevel bool) {
 	if depth > waMessageProtoMaxDepth || len(raw) == 0 {
 		return
 	}
 	fields, ok := parseWAProtoFields(raw)
+	if !ok && allowLenientTopLevel && depth == 0 && len(path) == 0 {
+		fields, ok = parseWAProtoFieldsLenient(raw)
+	}
 	if !ok {
 		return
 	}
@@ -136,7 +143,7 @@ func collectWAMessageText(raw []byte, path []protowire.Number, depth int, candid
 		if value, score, ok := waMessagePlaceholder(fieldPath); ok {
 			*candidates = append(*candidates, newWAMessageTextCandidate(value, score))
 		}
-		collectWAMessageText(field.Value, fieldPath, depth+1, candidates)
+		collectWAMessageTextWithOptions(field.Value, fieldPath, depth+1, candidates, false)
 	}
 }
 
@@ -147,7 +154,7 @@ func collectOffsetWAMessageText(raw []byte, candidates *[]waMessageTextCandidate
 	}
 	for offset := 1; offset < limit; offset++ {
 		offsetCandidates := []waMessageTextCandidate{}
-		collectWAMessageText(raw[offset:], nil, 0, &offsetCandidates)
+		collectWAMessageTextWithOptions(raw[offset:], nil, 0, &offsetCandidates, false)
 		for _, candidate := range offsetCandidates {
 			candidate.score -= 120 + offset
 			if candidate.score >= 650 {
@@ -209,6 +216,63 @@ func ParseWAProtoFieldsWithLimit(raw []byte, maxFields int) ([]WAProtoField, boo
 		}
 	}
 	return fields, true
+}
+
+// parseWAProtoFieldsLenient keeps the fields decoded before the first invalid
+// tag or truncated value instead of rejecting the whole payload, so a display
+// text can still be extracted from message frames with trailing garbage.
+func parseWAProtoFieldsLenient(raw []byte) ([]WAProtoField, bool) {
+	return parseWAProtoFieldsLenientWithLimit(raw, waMessageProtoMaxFields)
+}
+
+func parseWAProtoFieldsLenientWithLimit(raw []byte, maxFields int) ([]WAProtoField, bool) {
+	if maxFields <= 0 {
+		return nil, false
+	}
+	fields := []WAProtoField{}
+	for len(raw) > 0 {
+		if len(fields) >= maxFields {
+			return fields, len(fields) > 0
+		}
+		number, kind, tagSize := protowire.ConsumeTag(raw)
+		if tagSize < 0 || !number.IsValid() {
+			return fields, len(fields) > 0
+		}
+		valueBytes := raw[tagSize:]
+		switch kind {
+		case protowire.BytesType:
+			value, size := protowire.ConsumeBytes(valueBytes)
+			if size < 0 {
+				return fields, len(fields) > 0
+			}
+			fields = append(fields, WAProtoField{Number: number, Kind: kind, Value: value})
+			raw = valueBytes[size:]
+		case protowire.VarintType:
+			value, size := protowire.ConsumeVarint(valueBytes)
+			if size < 0 {
+				return fields, len(fields) > 0
+			}
+			fields = append(fields, WAProtoField{Number: number, Kind: kind, Varint: value})
+			raw = valueBytes[size:]
+		case protowire.Fixed32Type:
+			_, size := protowire.ConsumeFixed32(valueBytes)
+			if size < 0 {
+				return fields, len(fields) > 0
+			}
+			fields = append(fields, WAProtoField{Number: number, Kind: kind})
+			raw = valueBytes[size:]
+		case protowire.Fixed64Type:
+			_, size := protowire.ConsumeFixed64(valueBytes)
+			if size < 0 {
+				return fields, len(fields) > 0
+			}
+			fields = append(fields, WAProtoField{Number: number, Kind: kind})
+			raw = valueBytes[size:]
+		default:
+			return fields, len(fields) > 0
+		}
+	}
+	return fields, len(fields) > 0
 }
 
 func waKnownTextField(path []protowire.Number, raw []byte) (string, int, bool) {

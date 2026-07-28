@@ -85,7 +85,7 @@ function LinkPreview({ url }: { url: string }) {
 function stripRichPrefix(text: string) {
   const value = text.trim();
   for (const prefix of RICH_PREFIXES) {
-    if (value === prefix) return '';
+    if (value === prefix) return value;
     if (value.startsWith(`${prefix} `)) return value.slice(prefix.length).trim();
   }
   return text;
