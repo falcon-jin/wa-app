@@ -32,6 +32,10 @@ const (
 func main() {
 	cfg := config.Load()
 	dataDir := configValue(cfg.DataDir, defaultWAAppDataDirectory)
+	fiveSimConfig, err := newDashboardFiveSimConfig(cfg.FiveSimToken, cfg.FiveSimAPIBaseURL, newFileFiveSimTokenStore(dataDir))
+	if err != nil {
+		log.Fatalf("initialize 5sim config: %v", err)
+	}
 	if err := engine.LoadRegistrationDeviceProfiles(cfg.DeviceProfilesFile); err != nil {
 		log.Printf("wa-app device profiles override ignored: %v", err)
 	}
@@ -105,10 +109,7 @@ func main() {
 		return nil
 	})
 	group.Go(func() error {
-		return runDashboardHTTP(groupCtx, dashboardHTTPAddr, dashboardStaticDir, service, newWAActionHandler(service), authConfig, dashboardFiveSimConfig{
-			Token:      cfg.FiveSimToken,
-			APIBaseURL: cfg.FiveSimAPIBaseURL,
-		})
+		return runDashboardHTTP(groupCtx, dashboardHTTPAddr, dashboardStaticDir, service, newWAActionHandler(service), authConfig, fiveSimConfig)
 	})
 	group.Go(func() error {
 		return service.RunLongConnections(groupCtx)

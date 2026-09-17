@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,11 +14,6 @@ import (
 	"github.com/byte-v-forge/wa-app/internal/waapp/fivesim"
 	"github.com/nyaruka/phonenumbers"
 )
-
-type dashboardFiveSimConfig struct {
-	Token      string
-	APIBaseURL string
-}
 
 type fiveSimPhoneTarget struct {
 	Region             string `json:"region"`
@@ -42,7 +38,34 @@ type fiveSimOrderDTO struct {
 }
 
 func (s *dashboardHTTP) fiveSimClient() *fivesim.Client {
-	return fivesim.NewClient(s.fiveSim.Token, s.fiveSim.APIBaseURL, nil)
+	token, apiBaseURL := s.fiveSim.snapshot()
+	return fivesim.NewClient(token, apiBaseURL, nil)
+}
+
+func (s *dashboardHTTP) handleFiveSimConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	payload, ok := readJSONPayload(w, r)
+	if !ok {
+		return
+	}
+	rawToken, present := payload["token"]
+	token, isString := rawToken.(string)
+	if !present || !isString {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token must be a string"})
+		return
+	}
+	if err := s.fiveSim.setToken(token); err != nil {
+		if errors.Is(err, errFiveSimTokenTooLong) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "save 5sim token failed"})
+		return
+	}
+	writeFiveSimStatus(w, s.fiveSim)
 }
 
 func (s *dashboardHTTP) handleFiveSimStatus(w http.ResponseWriter, r *http.Request) {
@@ -50,8 +73,13 @@ func (s *dashboardHTTP) handleFiveSimStatus(w http.ResponseWriter, r *http.Reque
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
+	writeFiveSimStatus(w, s.fiveSim)
+}
+
+func writeFiveSimStatus(w http.ResponseWriter, config *dashboardFiveSimConfig) {
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"configured": strings.TrimSpace(s.fiveSim.Token) != "",
+		"configured": config.configured(),
 		"product":    fivesim.Product,
 	})
 }

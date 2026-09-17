@@ -4,6 +4,7 @@
 !.env.example
 *.log
 *.tmp
+fivesim-token
 .tmp/
 .temp/
 .venv/

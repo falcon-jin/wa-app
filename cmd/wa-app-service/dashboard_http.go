@@ -31,11 +31,11 @@ type dashboardHTTP struct {
 	staticDir     string
 	service       *rpc.Server
 	actionHandler http.Handler
-	fiveSim       dashboardFiveSimConfig
+	fiveSim       *dashboardFiveSimConfig
 	fiveSimTasks  *fiveSimRegistrationTaskManager
 }
 
-func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service *rpc.Server, actionHandler http.Handler, auth dashboardAuthConfig, fiveSim dashboardFiveSimConfig) error {
+func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service *rpc.Server, actionHandler http.Handler, auth dashboardAuthConfig, fiveSim *dashboardFiveSimConfig) error {
 	if strings.TrimSpace(listenAddr) == "" {
 		return nil
 	}
@@ -51,6 +51,7 @@ func runDashboardHTTP(ctx context.Context, listenAddr, staticDir string, service
 	mux.HandleFunc("/api/wa/play-integrity/status", server.handlePlayIntegrityAPIStatus)
 	mux.HandleFunc("/api/wa/phone/sms-probe", server.handlePhoneSMSProbe)
 	mux.HandleFunc("/api/wa/register", server.handleRegister)
+	mux.HandleFunc("/api/wa/debug/5sim/config", server.handleFiveSimConfig)
 	mux.HandleFunc("/api/wa/debug/5sim/status", server.handleFiveSimStatus)
 	mux.HandleFunc("/api/wa/debug/5sim/whatsapp-inventory", server.handleFiveSimWhatsAppInventory)
 	mux.HandleFunc("/api/wa/debug/5sim/registration-tasks", server.handleFiveSimRegistrationTasks)

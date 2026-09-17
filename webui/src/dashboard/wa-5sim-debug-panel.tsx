@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Check, ChevronDown, LoaderCircle, Play, RefreshCcw, Search, Square, SquareStack } from 'lucide-react';
+import { Check, ChevronDown, Eye, EyeOff, KeyRound, LoaderCircle, Play, RefreshCcw, Search, Square, SquareStack } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -9,6 +10,7 @@ import {
   getFiveSimRegistrationTasks,
   getFiveSimStatus,
   getFiveSimWhatsAppInventory,
+  setFiveSimToken,
   startFiveSimRegistrationTask,
   stopAllFiveSimRegistrationTasks,
   stopFiveSimRegistrationTask,
@@ -31,6 +33,11 @@ type Props = {
 
 export function WaFiveSimDebugPanel({ disabled, waBusy }: Props) {
   const session = useFiveSimDebugSession();
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+  const [tokenVisible, setTokenVisible] = useState(false);
+  const [tokenPending, setTokenPending] = useState(false);
+  const [tokenError, setTokenError] = useState('');
   const {
     status,
     inventory,
@@ -120,6 +127,7 @@ export function WaFiveSimDebugPanel({ disabled, waBusy }: Props) {
   const configured = status?.configured === true;
   const targetSuccess = clampInteger(Number(successTarget), 1, 100);
   const canStart = configured && Boolean(country && operator) && !disabled && !waBusy && !running && !actionPending;
+  const canConfigure = !disabled && !waBusy && !running && !actionPending && !loading && !tasksLoading && !tokenPending;
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ block: 'end' });
@@ -185,8 +193,39 @@ export function WaFiveSimDebugPanel({ disabled, waBusy }: Props) {
     }
   }
 
+  function openTokenDialog() {
+    setTokenInput('');
+    setTokenVisible(false);
+    setTokenError('');
+    setTokenDialogOpen(true);
+  }
+
+  function closeTokenDialog(force = false) {
+    if (tokenPending && !force) return;
+    setTokenDialogOpen(false);
+    setTokenInput('');
+    setTokenVisible(false);
+    setTokenError('');
+  }
+
+  async function saveToken(value = tokenInput) {
+    setTokenPending(true);
+    setTokenError('');
+    try {
+      const nextStatus = await setFiveSimToken(value.trim());
+      fiveSimDebugSession.setState({ status: nextStatus, inventory: [], loadError: '' });
+      closeTokenDialog(true);
+      await refresh();
+    } catch (error) {
+      setTokenError(errorMessage(error));
+    } finally {
+      setTokenPending(false);
+    }
+  }
+
   return (
-    <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
+    <>
+      <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="grid gap-1">
           <div className="text-sm font-medium">5sim 调试</div>
@@ -194,6 +233,10 @@ export function WaFiveSimDebugPanel({ disabled, waBusy }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <Badge variant={configured ? 'default' : 'secondary'}>{configured ? '已配置' : '未配置 API key'}</Badge>
+          <Button type="button" size="sm" variant="outline" disabled={!canConfigure} onClick={openTokenDialog}>
+            <KeyRound size={14} />
+            {configured ? '更换密钥' : '配置密钥'}
+          </Button>
           <Button type="button" size="icon" variant="outline" title="刷新 5sim 库存和任务" aria-label="刷新 5sim 库存和任务" disabled={loading || actionPending} onClick={() => void refresh()}>
             {loading || tasksLoading ? <LoaderCircle className="animate-spin" size={14} /> : <RefreshCcw size={14} />}
           </Button>
@@ -307,7 +350,54 @@ export function WaFiveSimDebugPanel({ disabled, waBusy }: Props) {
           </div>
         </div>
       </FieldGroup>
-    </div>
+      </div>
+      <Dialog open={tokenDialogOpen} onOpenChange={(open) => { if (open) openTokenDialog(); else closeTokenDialog(); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="inline-flex items-center gap-2"><KeyRound size={16} />配置 5sim 短信密钥</DialogTitle>
+            <DialogDescription>密钥只提交到服务端，前端不会回显或保存。清空输入并保存可以移除当前配置。</DialogDescription>
+          </DialogHeader>
+          <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); void saveToken(); }}>
+            <div className="grid gap-2">
+              <FieldLabel htmlFor="five-sim-token">5sim API key</FieldLabel>
+              <div className="relative">
+                <Input
+                  id="five-sim-token"
+                  className="pr-10"
+                  type={tokenVisible ? 'text' : 'password'}
+                  value={tokenInput}
+                  autoComplete="off"
+                  placeholder="输入 5sim API key"
+                  disabled={tokenPending}
+                  onChange={(event) => setTokenInput(event.target.value)}
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="absolute right-1 top-1/2 size-7 -translate-y-1/2"
+                  aria-label={tokenVisible ? '隐藏密钥' : '显示密钥'}
+                  title={tokenVisible ? '隐藏密钥' : '显示密钥'}
+                  disabled={tokenPending}
+                  onClick={() => setTokenVisible((value) => !value)}
+                >
+                  {tokenVisible ? <EyeOff size={14} /> : <Eye size={14} />}
+                </Button>
+              </div>
+              {tokenError ? <p className="text-xs text-destructive">{tokenError}</p> : null}
+            </div>
+            <DialogFooter>
+              {configured ? <Button type="button" variant="ghost" className="mr-auto text-destructive hover:text-destructive" disabled={tokenPending} onClick={() => void saveToken('')}>清除密钥</Button> : null}
+              <DialogClose asChild><Button type="button" variant="outline" disabled={tokenPending}>取消</Button></DialogClose>
+              <Button type="submit" disabled={tokenPending}>
+                {tokenPending ? <LoaderCircle className="animate-spin" size={14} /> : null}
+                保存密钥
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

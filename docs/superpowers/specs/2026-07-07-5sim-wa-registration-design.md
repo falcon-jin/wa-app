@@ -55,10 +55,10 @@ Authenticated calls use `Authorization: Bearer $token` and `Accept: application/
 
 Add service-side environment variables:
 
-- `WA_APP_5SIM_TOKEN`: 5sim API token. If empty, all 5sim debug endpoints return `configured: false` and the UI disables the panel.
+- `WA_APP_5SIM_TOKEN`: initial 5sim API token. If empty and no dashboard-saved token exists, the status endpoint returns `configured: false`.
 - `WA_APP_5SIM_API_BASE_URL`: optional override for tests; defaults to `https://5sim.net`.
 
-The token must never be returned to the frontend, written to logs, stored in proto records, or persisted in account data.
+The token must never be returned to the frontend, written to logs, stored in proto records, or persisted in account data. The dashboard may update the server-side token through the dashboard-only configuration endpoint; the saved value is kept outside account data.
 
 ## Backend Components
 
@@ -71,6 +71,9 @@ Add a small package or BFF module for 5sim:
 
 Dashboard endpoints:
 
+- `POST /api/wa/debug/5sim/config`
+  - Request body: `{ "token": "..." }`; an empty token clears the dashboard override.
+  - Returns only whether the token is configured; never returns the token itself.
 - `GET /api/wa/debug/5sim/status`
   - Returns whether token is configured.
 - `GET /api/wa/debug/5sim/whatsapp-inventory`
